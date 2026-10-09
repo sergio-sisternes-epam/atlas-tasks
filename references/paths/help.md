@@ -13,7 +13,7 @@ Explain atlas-tasks modules without mounting or writing. Emit activation card wi
 | add | **New** task or task list (`tasks/<ULID>-<name>.md` or `.task-list.md` + folder + root/list membership). Not complete. |
 | update | Change status/title/body/relations/membership/rename without the complete ritual |
 | complete | Mark an **existing** task done. Not add. |
-| list | Read root task list and walk child lists by pointer; title + ULID; derived blocked |
+| list | Recall (read) root task list and walk child lists by pointer; `query` is a deprecated alias; title + ULID; derived blocked |
 
 ## Field reminder (v0.6)
 

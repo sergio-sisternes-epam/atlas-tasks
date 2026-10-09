@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic smokes for atlas-tasks (v0.6.2 — task lists + ULID-plus-name; contract-key-only overlay).
+# Deterministic smokes for atlas-tasks (v0.6.3 — recall alias + task lists; contract-key-only overlay).
 # Usage:
 #   smoke-check.sh <atlas-tasks-package-root>
 #   smoke-check.sh <atlas-tasks-package-root> --check <name>
@@ -13,6 +13,7 @@
 #               task-list-suffix-matches-type | listed-task-not-loose-on-index |
 #               list-link-does-not-copy-tasks | rename-keeps-ulid-uri |
 #               member-lives-in-list-folder | membership-both-sides | filename-ulid-and-name |
+#               recall-alias | no-mandatory-notes-or-vault-tool |
 #               (default: all)
 set -euo pipefail
 PKG_ROOT="${1:-}"
@@ -64,7 +65,7 @@ if [[ -z "$CHECK_ONLY" ]]; then
   grep -q '"contribution_id": "atlas-tasks"' "$OVERLAY" || fail "bad contribution_id"
   [[ ! -d "$SKILL/contributions/atlas-todo" ]] || fail "legacy contributions/atlas-todo must be absent"
   grep -qE '^name: atlas-tasks$' "$SKILL/SKILL.md" || fail "SKILL name must be atlas-tasks"
-  grep -qE 'version: "0\.6\.2"' "$PKG_ROOT/apm.yml" || fail "apm.yml version must be 0.6.2"
+  grep -qE 'version: "0\.6\.3"' "$PKG_ROOT/apm.yml" || fail "apm.yml version must be 0.6.3"
   python3 - <<PY || fail "overlay extend-not-replace"
 import json,sys
 o=json.load(open("$OVERLAY"))
@@ -743,9 +744,9 @@ run_check() {
 # ---------------------------------------------------------------------------
 check_package_identity() {
   grep -qE '^name: atlas-tasks$' "$PKG_ROOT/apm.yml" || fail "apm.yml name"
-  grep -qE 'version: "0\.6\.2"' "$PKG_ROOT/apm.yml" || fail "apm.yml version"
+  grep -qE 'version: "0\.6\.3"' "$PKG_ROOT/apm.yml" || fail "apm.yml version"
   grep -qE '^name: atlas-tasks$' "$SKILL/SKILL.md" || fail "SKILL name"
-  grep -qE 'version: "0\.6\.2"' "$SKILL/SKILL.md" || fail "SKILL version"
+  grep -qE 'version: "0\.6\.3"' "$SKILL/SKILL.md" || fail "SKILL version"
   [[ -d "$SKILL/contributions/atlas-tasks" ]] || fail "missing contributions/atlas-tasks"
   [[ ! -d "$SKILL/contributions/atlas-todo" ]] || fail "legacy contributions/atlas-todo present"
   [[ -f "$SKILL/references/paths/migrate.md" ]] || fail "missing migrate path"
@@ -757,7 +758,7 @@ check_package_identity() {
     | grep -vE 'todo_id →|todo_status →|Never write .todo_|legacy|migrate|Hard cut|no .todo_'; then
     fail "contract samples still use todo_id/todo_status"
   fi
-  echo "atlas-tasks 0.6.2"
+  echo "atlas-tasks 0.6.3"
   grep -q 'type: task-list' "$SKILL/SKILL.md" || fail "SKILL missing task-list"
   grep -q 'task_list' "$SKILL/SKILL.md" || fail "SKILL missing task_list field"
   grep -q '<ULID>-<file-safe-name>' "$SKILL/SKILL.md" || fail "SKILL missing ULID-plus-name filename"
@@ -771,9 +772,51 @@ check_package_identity() {
   if grep -nE 'self-reference per skill|may omit or self-reference' "$README_CONTRIB" "$SKILL/references/paths/add.md" 2>/dev/null; then
     fail "docs still allow root task_list self-reference"
   fi
-  pass "package-identity: atlas-tasks 0.6.2"
+  pass "package-identity: atlas-tasks 0.6.3"
 }
 run_check package-identity check_package_identity
+
+check_recall_alias() {
+  grep -Fq -- '- **list** / recall → `references/paths/list.md`' "$SKILL/SKILL.md" \
+    || fail "SKILL must route list / recall to references/paths/list.md"
+  grep -Fq -- '- `query` (deprecated alias) → same as **list** / recall' "$SKILL/SKILL.md" \
+    || fail "SKILL must keep query as a deprecated alias for list / recall"
+  pass "recall-alias: recall routes to list and query remains deprecated alias"
+}
+run_check recall-alias check_recall_alias
+
+check_no_mandatory_notes_or_vault_tool() {
+  python3 - "$SKILL" <<'PY' || fail "no-mandatory-notes-or-vault-tool"
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+files = [root / "SKILL.md", root / "README.md", root / "apm.yml"]
+for directory in ("references", "contributions"):
+    files.extend(
+        path for path in (root / directory).rglob("*")
+        if path.is_file() and path.name != "CHANGELOG.md"
+    )
+
+issues = []
+for path in files:
+    text = path.read_text(encoding="utf-8")
+    for number, line in enumerate(text.splitlines(), 1):
+        if re.search(r"apple-notes", line, re.IGNORECASE):
+            issues.append(f"{path.relative_to(root)}:{number}: apple-notes dependency/reference")
+        if re.search(r"\bop\s+(?:read|item)\b|op://", line, re.IGNORECASE):
+            issues.append(f"{path.relative_to(root)}:{number}: 1Password command")
+        if re.search(r"apple notes|1password", line, re.IGNORECASE) and "e.g." not in line:
+            issues.append(f"{path.relative_to(root)}:{number}: Apple Notes/1Password mention needs e.g.")
+
+if issues:
+    raise SystemExit("\n".join(issues))
+print("no mandatory Apple Notes or 1Password tooling")
+PY
+  pass "no-mandatory-notes-or-vault-tool: no required Notes/vault tooling"
+}
+run_check no-mandatory-notes-or-vault-tool check_no_mandatory_notes_or_vault_tool
 
 check_overlay_claim() {
   python3 - <<PY || fail "overlay-claim"

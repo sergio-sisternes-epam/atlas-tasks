@@ -18,7 +18,7 @@ Load `references/paths/activation.md` first. Card `path: migrate`.
 
 ## Checklist A — todo/ → tasks/ (v0.2 → v0.3)
 
-1. Retarget the package install pin to `atlas-tasks` (after publish: `sergio-sisternes-epam/atlas-tasks#v0.6.2`).
+1. Retarget the package install pin to `atlas-tasks` (after publish: `sergio-sisternes-epam/atlas-tasks#v0.6.3`).
 2. On the named Atlas root, rename the overlay folder: `todo/` → `tasks/`.
 3. For every pointer page under `tasks/`, rewrite frontmatter: `todo_id` → `task_id`, `todo_status` → `task_status`.
 4. Rewrite `tasks/index.md`; drop `todo_` column headers.

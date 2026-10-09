@@ -2,7 +2,7 @@
 
 Distributed Atlas **task** discipline for agents that already use Atlas: per-Atlas `tasks/index.md` as the root **task list**, colocated task bodies, core Atlas `task` pages as pointers, and `type: task-list` pages for named groupings.
 
-Formerly **atlas-todo** (≤ v0.2). v0.3 renamed package/overlay/keys. v0.4 removed `depends_on` for `relates_to` dependency/blocks. v0.5 made `task_id` the full `atlas://<atlas_id>/tasks/<ULID>` composite. **v0.6.0** adds task lists (own file/folder, `task_list`/`tasks` pointers) and ULID-plus-name filenames. **v0.6.2** drops the informational `atlas_tasks` key from the overlay so it installs on SCHEMA 2.0 stores.
+Formerly **atlas-todo** (≤ v0.2). v0.3 renamed package/overlay/keys. v0.4 removed `depends_on` for `relates_to` dependency/blocks. v0.5 made `task_id` the full `atlas://<atlas_id>/tasks/<ULID>` composite. **v0.6.0** adds task lists (own file/folder, `task_list`/`tasks` pointers) and ULID-plus-name filenames. **v0.6.2** drops the informational `atlas_tasks` key from the overlay so it installs on SCHEMA 2.0 stores. **v0.6.3** renames the read verb from query to recall (query stays a deprecated alias).
 
 ## Capabilities
 
@@ -27,7 +27,7 @@ python3 <atlas-skill>/scripts/atlas.py schema install \
 python3 <atlas-skill>/scripts/atlas.py compile --root <your-atlas-root>
 ```
 
-Canonical install pin after publish: `sergio-sisternes-epam/atlas-tasks#v0.6.2`.
+Canonical install pin after publish: `sergio-sisternes-epam/atlas-tasks#v0.6.3`.
 
 Upgrading from v0.6.1 or older: rerun the same `schema install` (no `--force`), and do it before any `schema upgrade --to 2.0`.
 

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-09
+
+### Changed
+
+- Rename the read verb from `query` to `recall`, keeping `query` as a deprecated alias routing to `list`.
+
+### Added
+
+- Smoke checks `recall-alias` and `no-mandatory-notes-or-vault-tool`.
+
+### Not changed
+
+- No page, frontmatter, schema-key, or overlay change; no reinstall needed.
+
 ## [0.6.2] - 2026-10-09
 
 ### Fixed
@@ -133,7 +147,8 @@ First public release. No behaviour change.
   removed nested `.apm/skills/atlas-todo/`).
 - Aligned `apm.yml` version with skill metadata at `"0.2.0"`.
 
-[Unreleased]: https://github.com/sergio-sisternes-epam/atlas-tasks/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/sergio-sisternes-epam/atlas-tasks/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/sergio-sisternes-epam/atlas-tasks/releases/tag/v0.6.3
 [0.6.2]: https://github.com/sergio-sisternes-epam/atlas-tasks/releases/tag/v0.6.2
 [0.6.1]: https://github.com/sergio-sisternes-epam/atlas-tasks/releases/tag/v0.6.1
 [0.6.0]: https://github.com/sergio-sisternes-epam/atlas-tasks/releases/tag/v0.6.0
