@@ -1,0 +1,22 @@
+# Adversarial / deterministic smokes — atlas-todo v1
+# Plan: autogenesis/plans/2026-09-29-atlas-todo.md
+# Package layout: single APM tree — scenarios live under references/scenarios/
+version: 1
+capability: atlas-todo
+smokes:
+  - id: no-foreign-write
+    command: "bash scripts/smoke-check.sh ."
+    expect: "fail-closed: missing Atlas id"
+    source: "challenge: wrong Atlas"
+  - id: no-index-dump
+    command: "bash scripts/smoke-check.sh ."
+    expect: "PASS: 3 index + colocated body"
+    source: "challenge: index dump"
+  - id: extend-not-replace
+    command: "bash scripts/smoke-check.sh ."
+    expect: "PASS: 2 overlay present + extend-not-replace"
+    source: "challenge: parallel type"
+happy_path:
+  - id: layout-overlay-compile-readme
+    command: "bash scripts/smoke-check.sh ."
+    expect: "ALL SMOKES GREEN"

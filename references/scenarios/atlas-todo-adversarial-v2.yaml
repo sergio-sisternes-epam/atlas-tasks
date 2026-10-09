@@ -1,0 +1,35 @@
+# Adversarial / deterministic smokes — atlas-todo v2 (task relations)
+# Plan: autogenesis/plans/2026-09-29-atlas-todo-task-relations.md
+# Keep v1 file as history; this file adds relation/status counters.
+version: 1
+id: atlas-todo-adversarial-v2
+capability: atlas-todo
+adversarial: true
+work_id: 2026-09-29-atlas-todo-task-relations
+packages:
+  - atlas-todo
+smokes:
+  - id: cycle-creation
+    command: "bash scripts/smoke-check.sh . --check cycle-reject"
+    expect: "fail-closed: hierarchy cycle"
+    source: "challenge: dual-write drift / ADO one-parent invariant (GitHub solidify/jira-azuredevops-migrator#1155; Microsoft Parent/Child)"
+  - id: orphan-sub-tasks
+    command: "bash scripts/smoke-check.sh . --check orphan-sub-tasks"
+    expect: "fail-closed-or-repaired: orphan sub_tasks"
+    source: "challenge: dual-write without single writer leaves orphans (named theory: consistency under dual-write)"
+  - id: blocked-as-status
+    command: "bash scripts/smoke-check.sh . --check no-blocked-status"
+    expect: "reject todo_status:blocked; derived only"
+    source: "challenge: blocked-as-status regresses pin (Kit Friend / The Pinch; discuss pin-blocked-derived)"
+  - id: singular-assignee-regression
+    command: "bash scripts/smoke-check.sh . --check assignees-list"
+    expect: "reject singular assignee; assignees list only"
+    source: "challenge: singular assignee regression vs pin-assignees-list / GitHub multi-assignee"
+  - id: depends-on-cancelled-target
+    command: "bash scripts/smoke-check.sh . --check depends-on-terminal"
+    expect: "not-blocked when depends_on target cancelled"
+    source: "challenge: terminal deps must clear derived blocked (ADO predecessor + pin-blocked-derived)"
+happy_path:
+  - id: relations-sync-enum-overlay
+    command: "bash scripts/smoke-check.sh ."
+    expect: "ALL SMOKES GREEN"

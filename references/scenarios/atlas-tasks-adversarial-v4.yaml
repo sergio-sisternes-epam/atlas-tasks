@@ -1,0 +1,43 @@
+# Adversarial / deterministic smokes — atlas-tasks v0.6 (task lists + ULID-plus-name)
+# Plan: autogenesis/plans/2026-10-04-atlas-tasks-task-lists.md
+# Prior adversarial v1/v2/v3 kept as history under this folder.
+version: 1
+id: atlas-tasks-adversarial-v4
+capability: atlas-tasks
+adversarial: true
+work_id: 2026-10-04-atlas-tasks-task-lists
+packages:
+  - atlas-tasks
+smokes:
+  - id: task-list-suffix-matches-type
+    command: "bash scripts/smoke-check.sh . --check task-list-suffix-matches-type"
+    expect: "type task-list ends in .task-list.md except tasks/index.md; type task does not"
+    source: "pin-task-list-extension"
+  - id: listed-task-not-loose-on-index
+    command: "bash scripts/smoke-check.sh . --check listed-task-not-loose-on-index"
+    expect: "a task URI inside a child list is absent from root tasks"
+    source: "pin-main-index-is-a-task-list"
+  - id: list-link-does-not-copy-tasks
+    command: "bash scripts/smoke-check.sh . --check list-link-does-not-copy-tasks"
+    expect: "a list pointer does not duplicate the target list task URIs"
+    source: "pin-list-link-is-a-pointer"
+  - id: rename-keeps-ulid-uri
+    command: "bash scripts/smoke-check.sh . --check rename-keeps-ulid-uri"
+    expect: "title change keeps task_id URI and ULID; slug path is not the id; no store-wide scan"
+    source: "ntropy ADR 0004 and ADR 0028 / challenge pin"
+  - id: member-lives-in-list-folder
+    command: "bash scripts/smoke-check.sh . --check member-lives-in-list-folder"
+    expect: "task with task_list L is inside L folder; loose task is not"
+    source: "pin-list-has-own-folder"
+  - id: membership-both-sides
+    command: "bash scripts/smoke-check.sh . --check membership-both-sides"
+    expect: "task_list and list tasks agree"
+    source: "challenge pin / PageSpace dual-write"
+  - id: filename-ulid-and-name
+    command: "bash scripts/smoke-check.sh . --check filename-ulid-and-name"
+    expect: "ULID-hyphen-file-safe-name"
+    source: "pin-filename-ulid-and-name"
+happy_path:
+  - id: task-list-layout-compile
+    command: "bash scripts/smoke-check.sh ."
+    expect: "ALL SMOKES GREEN"

@@ -1,0 +1,43 @@
+# Adversarial / deterministic smokes — atlas-tasks v0.5 (ULID + atlas:// identity)
+# Discuss pins: discuss/atlas-tasks-ulid-atlas-uri
+# Prior adversarial v1/v2 kept as history under this folder.
+version: 1
+id: atlas-tasks-adversarial-v3
+capability: atlas-tasks
+adversarial: true
+work_id: 2026-10-01-atlas-tasks-ulid-atlas-uri
+packages:
+  - atlas-tasks
+smokes:
+  - id: task-id-atlas-uri
+    command: "bash scripts/smoke-check.sh . --check task-id-atlas-uri"
+    expect: "composite atlas://"
+    source: "pin-task-id-atlas-uri-composite"
+  - id: physical-path-ulid
+    command: "bash scripts/smoke-check.sh . --check physical-path-ulid"
+    expect: "tasks/<ULID>.md"
+    source: "pin-atlas-uri-physical-path"
+  - id: no-kebab-id
+    command: "bash scripts/smoke-check.sh . --check no-kebab-id"
+    expect: "reject kebab task_id"
+    source: "pin-migrate-hard-cut-kebab-to-atlas-uri"
+  - id: human-facing-ulid
+    command: "bash scripts/smoke-check.sh . --check human-facing-ulid"
+    expect: "title + ULID"
+    source: "pin-human-facing-title-ulid"
+  - id: cross-atlas-dependency
+    command: "bash scripts/smoke-check.sh . --check cross-atlas-dependency"
+    expect: "remote atlas:// dependency allowed"
+    source: "pin-cross-atlas-dependency-scope"
+  - id: same-atlas-parent
+    command: "bash scripts/smoke-check.sh . --check same-atlas-parent"
+    expect: "cross-Atlas parent"
+    source: "pin-cross-atlas-dependency-scope"
+  - id: fail-closed-remote
+    command: "bash scripts/smoke-check.sh . --check fail-closed-remote"
+    expect: "unresolved remote dependency"
+    source: "pin-cross-atlas-dependency-scope"
+happy_path:
+  - id: ulid-identity-layout-compile
+    command: "bash scripts/smoke-check.sh ."
+    expect: "ALL SMOKES GREEN"

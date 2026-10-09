@@ -1,0 +1,31 @@
+# Adversarial / deterministic smokes — atlas-tasks v0.4 (depends → relates_to)
+# Plan: autogenesis/plans/2026-09-29-atlas-tasks-depends-relates-to.md
+# Prior atlas-tasks adversarial v1 kept as history under this folder.
+version: 1
+id: atlas-tasks-adversarial-v2
+capability: atlas-tasks
+adversarial: true
+work_id: 2026-09-29-atlas-tasks-depends-relates-to
+packages:
+  - atlas-tasks
+smokes:
+  - id: no-depends_on-field
+    command: "bash scripts/smoke-check.sh . --check no-depends_on-field"
+    expect: "skill/docs do not require depends_on"
+    source: "remove-depends-on-pin"
+  - id: non-task-dependency-rejected
+    command: "bash scripts/smoke-check.sh . --check non-task-dependency"
+    expect: "fail-closed: non-task dependency target"
+    source: "targets-pin"
+  - id: dual-write-blocks
+    command: "bash scripts/smoke-check.sh . --check dual-write-blocks"
+    expect: "blocker gains kind:blocks"
+    source: "dual-write-pin"
+  - id: blocked-from-dependency-edges
+    command: "bash scripts/smoke-check.sh . --check blocked-from-dependency"
+    expect: "blocked iff any kind:dependency target open|in_progress"
+    source: "derived-blocked-pin"
+happy_path:
+  - id: dependency-edge-layout-compile
+    command: "bash scripts/smoke-check.sh ."
+    expect: "ALL SMOKES GREEN"

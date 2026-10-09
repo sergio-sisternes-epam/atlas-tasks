@@ -1,0 +1,17 @@
+name: atlas-tasks
+version: "0.6.1"
+description: Atlas tasks discipline — distributed Atlas task capability (source package)
+author: Sergio Sisternes
+license: Apache-2.0
+type: skill
+# Which agent platforms to deploy to.
+# Resolution order: --target flag > this field > auto-detect from filesystem.
+# Accepted values: agent-skills, antigravity, claude, codex, copilot, cursor, gemini, grok-build, hermes, kiro, opencode, vscode, windsurf
+targets:
+  - agent-skills
+  - cursor
+dependencies:
+  apm: []
+  mcp: []
+includes: auto
+scripts: {}

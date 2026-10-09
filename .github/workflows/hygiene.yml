@@ -1,0 +1,71 @@
+name: Hygiene
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - atlas
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    name: Public hygiene scan
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.30.1
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks (verified release tarball)
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/gitleaks"
+          mkdir -p "$dir"
+          cd "$dir"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLO "$base/$tarball"
+          curl -fsSLO "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          sha256sum -c --ignore-missing "gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          tar -xzf "$tarball" gitleaks
+          chmod +x gitleaks
+          echo "$dir" >> "$GITHUB_PATH"
+          ./gitleaks version
+
+      - name: Run public hygiene scan
+        env:
+          HYGIENE_REQUIRE_GITLEAKS: "1"
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          script="scripts/public-hygiene-scan.sh"
+          if [[ ! -f "$script" ]]; then
+            # Branches without the package tree (e.g. the atlas store branch)
+            # use the scan script from main.
+            script="$RUNNER_TEMP/public-hygiene-scan.sh"
+            git show origin/main:scripts/public-hygiene-scan.sh > "$script"
+          fi
+          case "$EVENT_NAME" in
+            pull_request)
+              args=(--range "${BASE_SHA}..${HEAD_SHA}") ;;
+            push)
+              if [[ -z "${BEFORE_SHA:-}" || "$BEFORE_SHA" =~ ^0+$ ]]; then
+                args=(--all)
+              else
+                args=(--range "${BEFORE_SHA}..${AFTER_SHA}")
+              fi ;;
+            *)
+              args=(--all) ;;
+          esac
+          bash "$script" "${args[@]}"

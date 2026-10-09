@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "stores": [
+    {
+      "id": "github.com/sergio-sisternes-epam/atlas-tasks",
+      "ref": "atlas",
+      "path": ".atlas/github.com/sergio-sisternes-epam/atlas-tasks",
+      "strategy": "shared"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+# Adversarial / deterministic smokes — atlas-tasks v0.3 (rename)
+# Plan: autogenesis/plans/2026-09-29-atlas-todo-rename-atlas-tasks.md
+# Prior atlas-todo adversarial v1/v2 kept as history under this folder.
+version: 1
+id: atlas-tasks-adversarial-v1
+capability: atlas-tasks
+adversarial: true
+work_id: 2026-09-29-atlas-todo-rename-atlas-tasks
+packages:
+  - atlas-tasks
+smokes:
+  - id: no-todo-folder-claim
+    command: "bash scripts/smoke-check.sh . --check overlay-claim"
+    expect: "claimed_folders=[tasks]"
+    source: "hard-cut-pin"
+  - id: no-todo_id-key
+    command: "bash scripts/smoke-check.sh . --check frontmatter-keys"
+    expect: "task_id"
+    source: "task_id-pin"
+  - id: no-todo_status-key
+    command: "bash scripts/smoke-check.sh . --check status-enum"
+    expect: "task_status|status enum ok|open|in_progress|done|cancelled"
+    source: "task_status-pin"
+  - id: depends_on-semantics-frozen
+    command: "bash scripts/smoke-check.sh . --check depends-on-derived"
+    expect: "blocked iff any depends_on target open|in_progress"
+    source: "rename-only-pin"
+  - id: no-legacy-contribution
+    command: "bash scripts/smoke-check.sh . --check package-identity"
+    expect: "atlas-tasks 0.3.0"
+    source: "package-repo-pin"
+happy_path:
+  - id: rename-layout-compile
+    command: "bash scripts/smoke-check.sh ."
+    expect: "ALL SMOKES GREEN"

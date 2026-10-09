@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Compile and smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install APM CLI
+        run: pip install apm-cli
+
+      - name: APM compile --validate (consumer install)
+        run: |
+          set -euo pipefail
+          # APM names local skills after the source dir basename; pin it to atlas-tasks.
+          src="$RUNNER_TEMP/src/atlas-tasks"
+          mkdir -p "$src"
+          git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C "$src"
+          consumer="$RUNNER_TEMP/atlas-tasks-consumer"
+          mkdir -p "$consumer"
+          cd "$consumer"
+          apm install "$src" --target agent-skills,cursor
+          test -f .agents/skills/atlas-tasks/SKILL.md
+          grep -Fx 'name: atlas-tasks' .agents/skills/atlas-tasks/SKILL.md
+          apm compile --validate --target agent-skills,cursor
+
+      - name: Checkout Atlas CLI for smokes
+        uses: actions/checkout@v5
+        with:
+          repository: sergio-sisternes-epam/atlas
+          path: .ci-atlas
+          sparse-checkout: |
+            scripts
+
+      - name: Run smoke-check
+        env:
+          ATLAS_CLI: ${{ github.workspace }}/.ci-atlas/scripts/atlas.py
+        run: bash scripts/smoke-check.sh .
+
+      - name: Pack dry-run
+        run: apm pack --dry-run
