@@ -61,6 +61,8 @@ bash scripts/public-hygiene-scan.sh --all
 
 `ATLAS_CLI` is optional when the `atlas` skill is installed as a sibling of this package (`../atlas/scripts/atlas.py`).
 
+The SCHEMA 2.0 smokes need the Python `jsonschema` package (`pip install jsonschema`); the check fails if it is missing.
+
 ## Support
 
 Source: https://github.com/sergio-sisternes-epam/atlas-tasks

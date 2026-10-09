@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `scripts/smoke-check.sh` check `overlay-root-keys`: overlay root keys must be a subset of `contribution_id`, `claimed_folders`, `templates`, `types`, `bindings`, `presets`.
-- `scripts/smoke-check.sh` runs the install + compile fixture on both a default `init` store and an `init --schema-version 2.0` store, and reads `atlas_id` from `CONTRACT.json` (Atlas 0.13+) or `SCHEMA.json`.
+- `scripts/smoke-check.sh` runs the install + compile fixture on both a default `init` store and an `init --schema-version 2.0` store, and reads `atlas_id` from `CONTRACT.json` (Atlas 0.13+) or `SCHEMA.json`. The SCHEMA 2.0 run needs the Python `jsonschema` package and fails closed without it; CI installs `jsonschema==4.25.1`.
 
 ### Not changed
 

@@ -1963,6 +1963,9 @@ PY
 
 if [[ -z "$CHECK_ONLY" ]]; then
   run_install_fixture default ""
+  # Fail closed: Atlas validates SCHEMA 2.0 stores with jsonschema; never skip silently.
+  python3 -c 'import jsonschema' 2>/dev/null \
+    || fail "SCHEMA 2.0 smokes need the Python jsonschema package (pip install jsonschema)"
   run_install_fixture "SCHEMA 2.0" "2.0" --schema-version 2.0
 
   README="$PKG_ROOT/README.md"
