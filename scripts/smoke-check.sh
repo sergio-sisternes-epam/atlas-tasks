@@ -807,8 +807,9 @@ for path in files:
             issues.append(f"{path.relative_to(root)}:{number}: apple-notes dependency/reference")
         if re.search(r"\bop\s+(?:read|item)\b|op://", line, re.IGNORECASE):
             issues.append(f"{path.relative_to(root)}:{number}: 1Password command")
-        if re.search(r"apple notes|1password", line, re.IGNORECASE) and "e.g." not in line:
-            issues.append(f"{path.relative_to(root)}:{number}: Apple Notes/1Password mention needs e.g.")
+        for match in re.finditer(r"apple.?notes|1password", line, re.IGNORECASE):
+            if not re.search(r"e\.g\.[^).;:!?()]*$", line[:match.start()]):
+                issues.append(f"{path.relative_to(root)}:{number}: Apple Notes/1Password mention needs e.g.")
 
 if issues:
     raise SystemExit("\n".join(issues))
