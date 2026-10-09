@@ -2,7 +2,7 @@
 name: atlas-tasks
 description: Use for distributed Atlas tasks — add/update/complete tasks and task lists, maintain per-Atlas tasks/index.md as the root task list, mount the atlas-tasks overlay on a user-named Atlas, and list/query task pointers with assignees, hierarchy, task_list membership, relates_to dependency/blocks dual-write and derived blocked. Trigger on atlas-tasks, atlas-todo, tasks index, todo index, add task, add todo, complete task, list tasks, task list, task-list, mount tasks overlay, distributed task, assignees, sub-tasks, depends_on, dependency, blocks, atlas://, ULID. Builds on core Atlas task; does not replace Governor tasks or APM HITL queues.
 metadata:
-  version: "0.6.1"
+  version: "0.6.2"
   status: mvp
   work_id: 2026-10-04-atlas-tasks-task-lists
 ---
@@ -12,6 +12,8 @@ metadata:
 Distributed Atlas **task** discipline. Each participating Atlas has `tasks/index.md` as the **root task list**. Task **bodies** live colocated next to related knowledge nodes. Core Atlas **`task`** pages and task-list pages act as **pointers**. Agents coordinate across Atlases by reading indexes on Atlases the user named.
 
 **v0.6.0** — breaking filename shape + new task-list surface: `type: task-list` (own file, own folder); root `tasks/index.md` is the list of lists and loose tasks; membership via `task_list` / `tasks` pointers (ULID URIs); filenames `<ULID>-<file-safe-name>` (`.task-list.md` for non-root lists). `task_id` stays `atlas://<atlas_id>/tasks/<ULID>` with no slug in the URI. Parent/`sub_tasks` stay; a parent is not a list. Discovery walks pointers from the root only. Package identity remains `atlas-tasks`.
+
+**v0.6.2** — the overlay carries only Atlas contract keys, so it installs on SCHEMA 2.0 stores. No page, frontmatter or schema-key change. Reinstall with `schema install` (no `--force`) before any `schema upgrade --to 2.0`.
 
 ## Pins (normative)
 
@@ -89,6 +91,7 @@ Atlas SCHEMA merge rejects overlay redeclaration of core `templates.by_type.task
 - `claimed_folders: ["tasks"]` on contribution `atlas-tasks`
 - skill-enforced frontmatter on `type: task` pointer pages (`task_id` as `atlas://…/ULID`, `task_status`, `assignees`, `parent`, `sub_tasks`, `task_list`, `relates_to` with dependency/blocks, `body_path`, …) — see `contributions/atlas-tasks/README.md`
 - overlay may declare **`task-list`** as a new type (not a core redeclaration) with skill-enforced `task_id`, `tasks`, optional `task_list`
+- `SCHEMA.overlay.json` carries only Atlas contract keys (no package metadata key); the normative extension contract is `contributions/atlas-tasks/README.md`
 
 ## Consumer flow
 
