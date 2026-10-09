@@ -777,6 +777,9 @@ check_package_identity() {
 run_check package-identity check_package_identity
 
 check_recall_alias() {
+  grep '^description:' "$SKILL/SKILL.md" \
+    | grep -Fq -- 'recall tasks, query tasks (deprecated alias of recall)' \
+    || fail "SKILL description must trigger on query tasks as a deprecated alias of recall"
   grep -Fq -- '- **list** / recall → `references/paths/list.md`' "$SKILL/SKILL.md" \
     || fail "SKILL must route list / recall to references/paths/list.md"
   grep -Fq -- '- `query` (deprecated alias) → same as **list** / recall' "$SKILL/SKILL.md" \
@@ -793,10 +796,11 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 files = [root / "SKILL.md", root / "README.md", root / "apm.yml"]
-for directory in ("references", "contributions"):
+for directory in ("references", "contributions", "scripts"):
     files.extend(
         path for path in (root / directory).rglob("*")
         if path.is_file() and path.name != "CHANGELOG.md"
+        and path != root / "scripts" / "smoke-check.sh"
     )
 
 issues = []

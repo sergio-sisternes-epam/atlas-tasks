@@ -1,6 +1,6 @@
 ---
 name: atlas-tasks
-description: Use for distributed Atlas tasks — add/update/complete tasks and task lists, maintain per-Atlas tasks/index.md as the root task list, mount the atlas-tasks overlay on a user-named Atlas, and list/recall task pointers with assignees, hierarchy, task_list membership, relates_to dependency/blocks dual-write and derived blocked. Trigger on atlas-tasks, atlas-todo, tasks index, todo index, add task, add todo, complete task, list tasks, recall tasks, task list, task-list, mount tasks overlay, distributed task, assignees, sub-tasks, depends_on, dependency, blocks, atlas://, ULID. Builds on core Atlas task; does not replace Governor tasks or APM HITL queues.
+description: Use for distributed Atlas tasks — add/update/complete tasks and task lists, maintain per-Atlas tasks/index.md as the root task list, mount the atlas-tasks overlay on a user-named Atlas, and list/recall task pointers with assignees, hierarchy, task_list membership, relates_to dependency/blocks dual-write and derived blocked. Trigger on atlas-tasks, atlas-todo, tasks index, todo index, add task, add todo, complete task, list tasks, recall tasks, query tasks (deprecated alias of recall), task list, task-list, mount tasks overlay, distributed task, assignees, sub-tasks, depends_on, dependency, blocks, atlas://, ULID. Builds on core Atlas task; does not replace Governor tasks or APM HITL queues.
 metadata:
   version: "0.6.3"
   status: mvp
