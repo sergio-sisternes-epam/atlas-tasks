@@ -2,7 +2,7 @@
 
 Load `references/paths/activation.md` first. Card `path: getting-started`.
 
-1. Install the APM package (root skill: `SKILL.md`, `contributions/`, `references/`, `scripts/`). Preferred pin after publish: `sergio-sisternes-epam/atlas-tasks#v0.6.2`.
+1. Install the APM package (root skill: `SKILL.md`, `contributions/`, `references/`, `scripts/`). Preferred pin after publish: `sergio-sisternes-epam/atlas-tasks#v0.6.3`.
 2. Ask the human which Atlas to use (id or mount root). Do not guess.
 3. Install the v0.6 schema before converting the root. One order:
    - Already v0.6: run **mount-overlay** on that Atlas only.
