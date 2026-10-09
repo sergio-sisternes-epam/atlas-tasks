@@ -13,7 +13,7 @@
 This README is the **normative extension contract**:
 
 - **Extended core type:** `task`. Atlas SCHEMA rejects an overlay that redeclares core `templates.by_type.task` (`overlay_core_type`), so the overlay leaves `task` alone and adds only the new type `task-list`.
-- **Extension mode:** skill-enforced frontmatter. The skill enforces the fields in the task and task-list contract tables below; Atlas SCHEMA does not. Blocked is derived from `kind: dependency` edges and never stored. Hierarchy (`parent` / `sub_tasks`) is same-Atlas only; dependency edges may cross Atlases through `atlas://` URIs and resolve fail-closed.
+- **Extension mode:** skill-enforced frontmatter. Through this overlay, Atlas SCHEMA requires `type`, `title`, `created` and `task_id` on `task-list` pages and recommends `tasks`, `task_list` and `description`. Everything else in the contract tables below is enforced only by the skill: the `task_*` fields, `assignees`, `parent`, `sub_tasks`, `task_list` and `relates_to` on `type: task`, plus the relational semantics (membership, hierarchy, dependency). Blocked is derived from `kind: dependency` edges and never stored. Hierarchy (`parent` / `sub_tasks`) is same-Atlas only; dependency edges may cross Atlases through `atlas://` URIs and resolve fail-closed.
 - **Version cuts:** v0.3 hard cut from `todo/` to `tasks/` (no read shim); v0.4 no `depends_on`; v0.5 `task_id` is `atlas://<atlas_id>/tasks/<ULID>` (no kebab `task_id` or `display_slug`); v0.6 ULID-plus-name filenames and task lists; v0.6.2 the overlay carries Atlas contract keys only (no page, frontmatter or schema-key change).
 
 ## What it does not do
