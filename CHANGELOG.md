@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-09
+
+### Fixed
+
+- The overlay now installs on Atlas SCHEMA 2.0 stores (Atlas 0.10.0 to 0.13.0, including 0.12.0 and 0.13.0). Before this fix, `atlas schema install` failed with `$: Unevaluated properties are not allowed ('atlas_tasks' was unexpected)`. `contributions/atlas-tasks/SCHEMA.overlay.json` now carries only Atlas contract keys.
+- The informational `atlas_tasks` overlay object (extended core type, extension mode, and the version-cut note) moved to `contributions/atlas-tasks/README.md`, which is now the normative extension contract. Nothing read the key.
+
+### Added
+
+- `scripts/smoke-check.sh` check `overlay-root-keys`: overlay root keys must be a subset of `contribution_id`, `claimed_folders`, `templates`, `types`, `bindings`, `presets`.
+- `scripts/smoke-check.sh` runs the install + compile fixture on both a default `init` store and an `init --schema-version 2.0` store, and reads `atlas_id` from `CONTRACT.json` (Atlas 0.13+) or `SCHEMA.json`. The SCHEMA 2.0 run needs the Python `jsonschema` package and fails closed without it; CI installs `jsonschema==4.25.1`.
+
+### Not changed
+
+- No page, frontmatter, or schema-key changes. `contribution_id`, `claimed_folders` and `templates` are identical to v0.6.1.
+
+### Upgrade
+
+- Reinstall the overlay with `schema install` on each Atlas that holds it. `--force` is not needed.
+- On SCHEMA 1.0 stores, reinstall **before** any `schema upgrade --to 2.0`. A store that still holds the v0.6.1 (or older) overlay can report the upgrade as ok and then fail compile.
+
 ## [0.6.1] - 2026-10-09
 
 First public release. No behaviour change.
@@ -112,7 +133,8 @@ First public release. No behaviour change.
   removed nested `.apm/skills/atlas-todo/`).
 - Aligned `apm.yml` version with skill metadata at `"0.2.0"`.
 
-[Unreleased]: https://github.com/sergio-sisternes-epam/atlas-tasks/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/sergio-sisternes-epam/atlas-tasks/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/sergio-sisternes-epam/atlas-tasks/releases/tag/v0.6.2
 [0.6.1]: https://github.com/sergio-sisternes-epam/atlas-tasks/releases/tag/v0.6.1
 [0.6.0]: https://github.com/sergio-sisternes-epam/atlas-tasks/releases/tag/v0.6.0
 [0.5.0]: https://github.com/sergio-sisternes-epam/atlas-tasks/releases/tag/v0.5.0

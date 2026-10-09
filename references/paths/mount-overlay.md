@@ -21,6 +21,8 @@ python3 <atlas-skill>/scripts/atlas.py schema install \
   --root <named-atlas-root> [--force]
 ```
 
+   Replacing a v0.6.1 (or older) overlay with v0.6.2 needs no `--force`. Do it before any `schema upgrade --to 2.0` on that Atlas.
+
 4. Compile:
 
 ```bash

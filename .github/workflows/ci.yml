@@ -21,8 +21,9 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install APM CLI
-        run: pip install apm-cli
+      # jsonschema: Atlas CLI needs it for SCHEMA 2.0 smokes (pin matches Atlas scripts/requirements-ci.txt).
+      - name: Install APM CLI and jsonschema
+        run: pip install apm-cli "jsonschema==4.25.1"
 
       - name: APM compile --validate (consumer install)
         run: |

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Deterministic smokes for atlas-tasks (v0.6 — task lists + ULID-plus-name).
+# Deterministic smokes for atlas-tasks (v0.6.2 — task lists + ULID-plus-name; contract-key-only overlay).
 # Usage:
 #   smoke-check.sh <atlas-tasks-package-root>
 #   smoke-check.sh <atlas-tasks-package-root> --check <name>
 # Named checks: cycle-reject | orphan-sub-tasks | no-blocked-status | assignees-list |
-#               frontmatter-keys | status-enum | dual-write | overlay-claim | package-identity |
+#               frontmatter-keys | status-enum | dual-write | overlay-claim | overlay-root-keys |
+#               package-identity |
 #               no-depends_on-field | dual-write-blocks | non-task-dependency |
 #               blocked-from-dependency | dependency-terminal | dependency-cycle |
 #               task-id-atlas-uri | physical-path-ulid | no-kebab-id | human-facing-ulid |
@@ -63,7 +64,7 @@ if [[ -z "$CHECK_ONLY" ]]; then
   grep -q '"contribution_id": "atlas-tasks"' "$OVERLAY" || fail "bad contribution_id"
   [[ ! -d "$SKILL/contributions/atlas-todo" ]] || fail "legacy contributions/atlas-todo must be absent"
   grep -qE '^name: atlas-tasks$' "$SKILL/SKILL.md" || fail "SKILL name must be atlas-tasks"
-  grep -qE 'version: "0\.6\.1"' "$PKG_ROOT/apm.yml" || fail "apm.yml version must be 0.6.1"
+  grep -qE 'version: "0\.6\.2"' "$PKG_ROOT/apm.yml" || fail "apm.yml version must be 0.6.2"
   python3 - <<PY || fail "overlay extend-not-replace"
 import json,sys
 o=json.load(open("$OVERLAY"))
@@ -742,9 +743,9 @@ run_check() {
 # ---------------------------------------------------------------------------
 check_package_identity() {
   grep -qE '^name: atlas-tasks$' "$PKG_ROOT/apm.yml" || fail "apm.yml name"
-  grep -qE 'version: "0\.6\.1"' "$PKG_ROOT/apm.yml" || fail "apm.yml version"
+  grep -qE 'version: "0\.6\.2"' "$PKG_ROOT/apm.yml" || fail "apm.yml version"
   grep -qE '^name: atlas-tasks$' "$SKILL/SKILL.md" || fail "SKILL name"
-  grep -qE 'version: "0\.6\.1"' "$SKILL/SKILL.md" || fail "SKILL version"
+  grep -qE 'version: "0\.6\.2"' "$SKILL/SKILL.md" || fail "SKILL version"
   [[ -d "$SKILL/contributions/atlas-tasks" ]] || fail "missing contributions/atlas-tasks"
   [[ ! -d "$SKILL/contributions/atlas-todo" ]] || fail "legacy contributions/atlas-todo present"
   [[ -f "$SKILL/references/paths/migrate.md" ]] || fail "missing migrate path"
@@ -756,7 +757,7 @@ check_package_identity() {
     | grep -vE 'todo_id →|todo_status →|Never write .todo_|legacy|migrate|Hard cut|no .todo_'; then
     fail "contract samples still use todo_id/todo_status"
   fi
-  echo "atlas-tasks 0.6.1"
+  echo "atlas-tasks 0.6.2"
   grep -q 'type: task-list' "$SKILL/SKILL.md" || fail "SKILL missing task-list"
   grep -q 'task_list' "$SKILL/SKILL.md" || fail "SKILL missing task_list field"
   grep -q '<ULID>-<file-safe-name>' "$SKILL/SKILL.md" || fail "SKILL missing ULID-plus-name filename"
@@ -770,7 +771,7 @@ check_package_identity() {
   if grep -nE 'self-reference per skill|may omit or self-reference' "$README_CONTRIB" "$SKILL/references/paths/add.md" 2>/dev/null; then
     fail "docs still allow root task_list self-reference"
   fi
-  pass "package-identity: atlas-tasks 0.6.1"
+  pass "package-identity: atlas-tasks 0.6.2"
 }
 run_check package-identity check_package_identity
 
@@ -788,6 +789,23 @@ PY
   pass "overlay-claim: claimed_folders=[tasks], no templates.by_type.task"
 }
 run_check overlay-claim check_overlay_claim
+
+# Atlas SCHEMA 2.0 stores validate overlays against contribution-v1
+# (unevaluatedProperties: false): any other root key fails `schema install`.
+check_overlay_root_keys() {
+  python3 - <<PY || fail "overlay-root-keys"
+import json
+o = json.load(open("$OVERLAY"))
+allowed = {"contribution_id", "claimed_folders", "templates", "types", "bindings", "presets"}
+extra = sorted(set(o) - allowed)
+assert not extra, f"overlay root keys outside the Atlas contribution contract: {extra}"
+print("root keys:", sorted(o))
+PY
+  grep -q 'only Atlas contract keys' "$README_CONTRIB" \
+    || fail "contribution README must state the overlay carries only Atlas contract keys"
+  pass "overlay-root-keys: overlay root keys within {contribution_id, claimed_folders, templates, types, bindings, presets}"
+}
+run_check overlay-root-keys check_overlay_root_keys
 
 check_no_depends_on_field() {
   if grep -nE '^\| `depends_on` \|' "$README_CONTRIB" 2>/dev/null; then
@@ -1731,13 +1749,28 @@ run_check clear-membership-reparents-to-root check_clear_membership_reparents_to
 
 # ---------------------------------------------------------------------------
 # Full-run fixture: index/compile + relation fixture (ULID-plus-name + task-list root)
+# Runs on a default `init` store and on an `init --schema-version 2.0` store,
+# because only SCHEMA 2.0 validates overlay root keys strictly.
+# Usage: run_install_fixture <label> <expected schema_version or ""> [init args...]
 # ---------------------------------------------------------------------------
-if [[ -z "$CHECK_ONLY" ]]; then
+run_install_fixture() {
+  local label="$1" want_sv="$2"
+  shift 2
   FIX=$(mktemp -d)
-  python3 "$ATLAS_CLI" init --root "$FIX" >/dev/null
-  python3 "$ATLAS_CLI" schema install "$SKILL/contributions/atlas-tasks" --root "$FIX"
-  # Atlas root contract file: CONTRACT.json (newer Atlas CLI) or SCHEMA.json (older).
-  AID=$(python3 -c "import json,os; p='$FIX/CONTRACT.json'; p=p if os.path.exists(p) else '$FIX/SCHEMA.json'; print(json.load(open(p))['atlas_id'])")
+  python3 "$ATLAS_CLI" init --root "$FIX" "$@" >/dev/null
+  # Atlas root contract file: CONTRACT.json (Atlas 0.13+) or SCHEMA.json (older).
+  local store_file="$FIX/CONTRACT.json"
+  [[ -f "$store_file" ]] || store_file="$FIX/SCHEMA.json"
+  [[ -f "$store_file" ]] || fail "init ($label) wrote neither CONTRACT.json nor SCHEMA.json"
+  local sv
+  read -r AID sv < <(python3 -c "import json; o=json.load(open('$store_file')); print(o['atlas_id'], o.get('schema_version', '1.0'))")
+  [[ -n "$AID" ]] || fail "init ($label): empty atlas_id"
+  if [[ -n "$want_sv" && "$sv" != "$want_sv" ]]; then
+    fail "init ($label) produced schema_version=$sv, expected $want_sv"
+  fi
+  python3 "$ATLAS_CLI" schema install "$SKILL/contributions/atlas-tasks" --root "$FIX" \
+    || fail "schema install on $label store (schema_version=$sv)"
+  pass "4a schema install on $label store (schema_version=$sv)"
   U_DEMO="01J8E3K7M4Q2V8X5N6P9R0T1YZ"
   U_PARENT="01J8E3K8N5R3W9Y6P7Q0S1V2A0"
   U_CHILD="01J8E3K9P6S4X0Z7Q8R1T2W3B1"
@@ -1923,8 +1956,17 @@ print("root tasks ok")
 PY
   pass "3 index task-list + colocated body + ULID-plus-name pointer + list folder + dependency columns"
 
-  python3 "$ATLAS_CLI" compile --root "$FIX" || fail "compile red"
-  pass "4 atlas compile green on fixture"
+  python3 "$ATLAS_CLI" compile --root "$FIX" || fail "compile red on $label store (schema_version=$sv)"
+  pass "4 atlas compile green on fixture ($label store, schema_version=$sv)"
+  rm -rf "$FIX"
+}
+
+if [[ -z "$CHECK_ONLY" ]]; then
+  run_install_fixture default ""
+  # Fail closed: Atlas validates SCHEMA 2.0 stores with jsonschema; never skip silently.
+  python3 -c 'import jsonschema' 2>/dev/null \
+    || fail "SCHEMA 2.0 smokes need the Python jsonschema package (pip install jsonschema)"
+  run_install_fixture "SCHEMA 2.0" "2.0" --schema-version 2.0
 
   README="$PKG_ROOT/README.md"
   grep -qi 'install' "$README" || fail "README missing install"
@@ -1932,7 +1974,6 @@ PY
   pass "6 README install → mount"
 
   echo "ALL SMOKES GREEN"
-  rm -rf "$FIX"
 fi
 
 rm -f "$HELPERS"

@@ -2,7 +2,7 @@
 
 Distributed Atlas **task** discipline for agents that already use Atlas: per-Atlas `tasks/index.md` as the root **task list**, colocated task bodies, core Atlas `task` pages as pointers, and `type: task-list` pages for named groupings.
 
-Formerly **atlas-todo** (≤ v0.2). v0.3 renamed package/overlay/keys. v0.4 removed `depends_on` for `relates_to` dependency/blocks. v0.5 made `task_id` the full `atlas://<atlas_id>/tasks/<ULID>` composite. **v0.6.0** adds task lists (own file/folder, `task_list`/`tasks` pointers) and ULID-plus-name filenames.
+Formerly **atlas-todo** (≤ v0.2). v0.3 renamed package/overlay/keys. v0.4 removed `depends_on` for `relates_to` dependency/blocks. v0.5 made `task_id` the full `atlas://<atlas_id>/tasks/<ULID>` composite. **v0.6.0** adds task lists (own file/folder, `task_list`/`tasks` pointers) and ULID-plus-name filenames. **v0.6.2** drops the informational `atlas_tasks` key from the overlay so it installs on SCHEMA 2.0 stores.
 
 ## Capabilities
 
@@ -27,7 +27,9 @@ python3 <atlas-skill>/scripts/atlas.py schema install \
 python3 <atlas-skill>/scripts/atlas.py compile --root <your-atlas-root>
 ```
 
-Canonical install pin after publish: `sergio-sisternes-epam/atlas-tasks#v0.6.1`.
+Canonical install pin after publish: `sergio-sisternes-epam/atlas-tasks#v0.6.2`.
+
+Upgrading from v0.6.1 or older: rerun the same `schema install` (no `--force`), and do it before any `schema upgrade --to 2.0`.
 
 ## First success
 
@@ -48,6 +50,7 @@ Canonical install pin after publish: `sergio-sisternes-epam/atlas-tasks#v0.6.1`.
 - Complements Governor tasks / APM HITL queues
 - Index holds pointers only; humans see title + ULID
 - v0.6: task lists + ULID-plus-name paths; hierarchy same-Atlas; dependency/blocks may cross; no kebab slug identity
+- Overlay carries only Atlas contract keys; the normative extension contract is `contributions/atlas-tasks/README.md`
 
 ## Smokes
 
@@ -57,6 +60,8 @@ bash scripts/public-hygiene-scan.sh --all
 ```
 
 `ATLAS_CLI` is optional when the `atlas` skill is installed as a sibling of this package (`../atlas/scripts/atlas.py`).
+
+The SCHEMA 2.0 smokes need the Python `jsonschema` package (`pip install jsonschema`); the check fails if it is missing.
 
 ## Support
 

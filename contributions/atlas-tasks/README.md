@@ -3,8 +3,18 @@
 ## What this overlay does
 
 - Claims the `tasks/` folder on the target Atlas (`tasks/index.md` lives here as the root task list).
-- Declares that the discipline **extends** core Atlas `task` without replacing it.
 - Adds overlay type **`task-list`** (new type — not a core redeclaration).
+- Leaves core Atlas `task` in place. The discipline **extends** it through skill-enforced frontmatter (see below), not through SCHEMA.
+
+## Overlay contents and extension contract
+
+`SCHEMA.overlay.json` carries **only Atlas contract keys**. Today it sets `contribution_id`, `claimed_folders` and `templates`; the allowed set is `contribution_id`, `claimed_folders`, `templates`, `types`, `bindings`, `presets`. It has no package metadata key. Up to v0.6.1 the overlay also shipped an informational `atlas_tasks` root object (`atlas_todo` in v0.2.0). Nothing read it, and Atlas SCHEMA 2.0 stores (Atlas 0.10.0 to 0.13.0) reject unknown overlay root keys at `schema install`, so v0.6.2 removed it.
+
+This README is the **normative extension contract**:
+
+- **Extended core type:** `task`. Atlas SCHEMA rejects an overlay that redeclares core `templates.by_type.task` (`overlay_core_type`), so the overlay leaves `task` alone and adds only the new type `task-list`.
+- **Extension mode:** skill-enforced frontmatter. Through this overlay, Atlas SCHEMA requires `type`, `title`, `created` and `task_id` on `task-list` pages and recommends `tasks`, `task_list` and `description`. Everything else in the contract tables below is enforced only by the skill: the `task_*` fields, `assignees`, `parent`, `sub_tasks`, `task_list` and `relates_to` on `type: task`, plus the relational semantics (membership, hierarchy, dependency). Blocked is derived from `kind: dependency` edges and never stored. Hierarchy (`parent` / `sub_tasks`) is same-Atlas only; dependency edges may cross Atlases through `atlas://` URIs and resolve fail-closed.
+- **Version cuts:** v0.3 hard cut from `todo/` to `tasks/` (no read shim); v0.4 no `depends_on`; v0.5 `task_id` is `atlas://<atlas_id>/tasks/<ULID>` (no kebab `task_id` or `display_slug`); v0.6 ULID-plus-name filenames and task lists; v0.6.2 the overlay carries Atlas contract keys only (no page, frontmatter or schema-key change).
 
 ## What it does not do
 
@@ -75,6 +85,8 @@ python3 <atlas-skill>/scripts/atlas.py compile --root <user-named-atlas-root>
 ```
 
 Only mount on an Atlas the user named.
+
+The overlay installs on both SCHEMA 1.0 and SCHEMA 2.0 stores. If a store holds the v0.6.1 (or older) overlay, rerun the same `schema install` with v0.6.2. `--force` is not needed. Do this **before** any `schema upgrade --to 2.0`: a store that still holds the old overlay can report the upgrade as ok and then fail compile.
 
 ## Migrate
 
