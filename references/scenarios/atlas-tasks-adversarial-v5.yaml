@@ -10,7 +10,7 @@ packages:
 smokes:
   - id: cancel-terminate-handoff
     command: "bash scripts/smoke-check.sh . --check cancel-terminate-handoff"
-    expect: "non-duplicate cancelled routes through Atlas terminate-wrong-path with exit-reason page, fallback and optional gist"
+    expect: "explicit non-duplicate cancel routes through the Atlas terminate-wrong-path recipe once per subject with a shared exit-reason page, fallback and optional gist; a compiled fixture passes the L4 assertion and a second kva_terminate edge fails it"
     source: "pin-status-cancel-closes-branch"
   - id: done-keeps-kva
     command: "bash scripts/smoke-check.sh . --check done-keeps-kva"

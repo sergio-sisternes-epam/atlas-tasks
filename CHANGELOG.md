@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fallback: without the `discuss` companion, `task_status: cancelled` is kept, `kva` is unchanged, and the gap is reported.
 - Smoke checks `cancel-terminate-handoff` and `done-keeps-kva`, and scenario `atlas-tasks-adversarial-v5`.
+- `cancel-terminate-handoff` builds a compiled fixture (cancelled and done tasks, living decision, exit-reason page) and runs an L4 assertion over it, plus a negative with a duplicate `kva_terminate` edge.
 
 ### Not changed
 
