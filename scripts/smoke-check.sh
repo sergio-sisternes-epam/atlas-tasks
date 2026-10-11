@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic smokes for atlas-tasks (v0.6.3 — recall alias + task lists; contract-key-only overlay).
+# Deterministic smokes for atlas-tasks (v0.6.4 — cancel closes the memory branch; recall alias + task lists; contract-key-only overlay).
 # Usage:
 #   smoke-check.sh <atlas-tasks-package-root>
 #   smoke-check.sh <atlas-tasks-package-root> --check <name>
@@ -14,6 +14,7 @@
 #               list-link-does-not-copy-tasks | rename-keeps-ulid-uri |
 #               member-lives-in-list-folder | membership-both-sides | filename-ulid-and-name |
 #               recall-alias | no-mandatory-notes-or-vault-tool |
+#               cancel-terminate-handoff | done-keeps-kva |
 #               (default: all)
 set -euo pipefail
 PKG_ROOT="${1:-}"
@@ -65,7 +66,7 @@ if [[ -z "$CHECK_ONLY" ]]; then
   grep -q '"contribution_id": "atlas-tasks"' "$OVERLAY" || fail "bad contribution_id"
   [[ ! -d "$SKILL/contributions/atlas-todo" ]] || fail "legacy contributions/atlas-todo must be absent"
   grep -qE '^name: atlas-tasks$' "$SKILL/SKILL.md" || fail "SKILL name must be atlas-tasks"
-  grep -qE 'version: "0\.6\.3"' "$PKG_ROOT/apm.yml" || fail "apm.yml version must be 0.6.3"
+  grep -qE 'version: "0\.6\.4"' "$PKG_ROOT/apm.yml" || fail "apm.yml version must be 0.6.4"
   python3 - <<PY || fail "overlay extend-not-replace"
 import json,sys
 o=json.load(open("$OVERLAY"))
@@ -744,21 +745,22 @@ run_check() {
 # ---------------------------------------------------------------------------
 check_package_identity() {
   grep -qE '^name: atlas-tasks$' "$PKG_ROOT/apm.yml" || fail "apm.yml name"
-  grep -qE 'version: "0\.6\.3"' "$PKG_ROOT/apm.yml" || fail "apm.yml version"
+  grep -qE 'version: "0\.6\.4"' "$PKG_ROOT/apm.yml" || fail "apm.yml version"
   grep -qE '^name: atlas-tasks$' "$SKILL/SKILL.md" || fail "SKILL name"
-  grep -qE 'version: "0\.6\.3"' "$SKILL/SKILL.md" || fail "SKILL version"
+  grep -qE 'version: "0\.6\.4"' "$SKILL/SKILL.md" || fail "SKILL version"
   [[ -d "$SKILL/contributions/atlas-tasks" ]] || fail "missing contributions/atlas-tasks"
   [[ ! -d "$SKILL/contributions/atlas-todo" ]] || fail "legacy contributions/atlas-todo present"
   [[ -f "$SKILL/references/paths/migrate.md" ]] || fail "missing migrate path"
   [[ -f "$SKILL/references/scenarios/atlas-tasks-adversarial-v3.yaml" ]] || fail "missing atlas-tasks adversarial v3"
   [[ -f "$SKILL/references/scenarios/atlas-tasks-adversarial-v4.yaml" ]] || fail "missing atlas-tasks adversarial v4"
+  [[ -f "$SKILL/references/scenarios/atlas-tasks-adversarial-v5.yaml" ]] || fail "missing atlas-tasks adversarial v5"
   grep -q 'atlas://' "$SKILL/SKILL.md" || fail "SKILL missing atlas:// identity"
   grep -qE 'tasks/<ULID>|<ULID>-<file-safe-name>' "$SKILL/SKILL.md" || fail "SKILL missing physical path grammar"
   if grep -RE 'todo_id:|todo_status:' "$README_CONTRIB" "$SKILL/references/paths/add.md" 2>/dev/null \
     | grep -vE 'todo_id →|todo_status →|Never write .todo_|legacy|migrate|Hard cut|no .todo_'; then
     fail "contract samples still use todo_id/todo_status"
   fi
-  echo "atlas-tasks 0.6.3"
+  echo "atlas-tasks 0.6.4"
   grep -q 'type: task-list' "$SKILL/SKILL.md" || fail "SKILL missing task-list"
   grep -q 'task_list' "$SKILL/SKILL.md" || fail "SKILL missing task_list field"
   grep -q '<ULID>-<file-safe-name>' "$SKILL/SKILL.md" || fail "SKILL missing ULID-plus-name filename"
@@ -772,7 +774,7 @@ check_package_identity() {
   if grep -nE 'self-reference per skill|may omit or self-reference' "$README_CONTRIB" "$SKILL/references/paths/add.md" 2>/dev/null; then
     fail "docs still allow root task_list self-reference"
   fi
-  pass "package-identity: atlas-tasks 0.6.3"
+  pass "package-identity: atlas-tasks 0.6.4"
 }
 run_check package-identity check_package_identity
 
@@ -1794,6 +1796,318 @@ PY
   pass "clear-membership-reparents-to-root: clear requires root_id; task becomes loose on root; nested list reparents to root"
 }
 run_check clear-membership-reparents-to-root check_clear_membership_reparents_to_root
+
+cancel_terminate_fixture() {
+  local fx store_file aid neg
+  fx=$(mktemp -d)
+  neg=$(mktemp -d)
+  python3 "$ATLAS_CLI" init --root "$fx" >/dev/null || { rm -rf "$fx" "$neg"; fail "terminate fixture: init"; }
+  store_file="$fx/CONTRACT.json"
+  [[ -f "$store_file" ]] || store_file="$fx/SCHEMA.json"
+  [[ -f "$store_file" ]] || { rm -rf "$fx" "$neg"; fail "terminate fixture: no CONTRACT.json or SCHEMA.json"; }
+  aid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['atlas_id'])" "$store_file")
+  [[ -n "$aid" ]] || { rm -rf "$fx" "$neg"; fail "terminate fixture: empty atlas_id"; }
+  python3 "$ATLAS_CLI" schema install "$SKILL/contributions/atlas-tasks" --root "$fx" >/dev/null \
+    || { rm -rf "$fx" "$neg"; fail "terminate fixture: schema install"; }
+
+  local uroot=01J8F2A0M1N2P3Q4R5S6T7V8W9 ucan=01J8F2A1X2Y3Z4A5B6C7D8E9F0 udone=01J8F2A2G3H4J5K6M7N8P9Q0R1
+  local troot="atlas://${aid}/tasks/${uroot}" tcan="atlas://${aid}/tasks/${ucan}" tdone="atlas://${aid}/tasks/${udone}"
+  local can_ptr="tasks/${ucan}-add-hostname-alias.md" done_ptr="tasks/${udone}-rotate-log-files.md"
+  local can_body="knowledge/hostname-alias/todo-add-alias.md" done_body="knowledge/logs/todo-rotate.md"
+  local living="knowledge/hostname-alias/decision-no-alias.md" exitp="knowledge/hostname-alias/exit-no-alias.md"
+  mkdir -p "$fx/tasks" "$fx/knowledge/hostname-alias" "$fx/knowledge/logs"
+
+  local d
+  for d in hostname-alias logs; do
+    printf -- '---\ntype: document\ntitle: Folder index\ncreated: "2026-10-02"\n---\nIndex for the %s folder in the terminate smoke fixture.\n' "$d" > "$fx/knowledge/$d/index.md"
+  done
+  cat > "$fx/tasks/index.md" <<MD
+---
+type: task-list
+title: Tasks index
+created: "2026-10-02"
+task_id: ${troot}
+tasks:
+  - ${tcan}
+  - ${tdone}
+---
+## Members
+
+Root task list with one cancelled and one done loose task.
+
+- Add a hostname alias — ${tcan}
+- Rotate log files — ${tdone}
+MD
+  cat > "$fx/$can_ptr" <<MD
+---
+type: task
+title: "Add a hostname alias"
+created: "2026-10-02"
+task_id: ${tcan}
+task_status: cancelled
+body_path: ${can_body}
+kva: terminated
+assignees: []
+parent: null
+sub_tasks: []
+relates_to:
+  - path: ${exitp}
+    kind: kva_terminate
+---
+## Content
+
+Pointer only; the request was declined, see the exit-reason page.
+MD
+  cat > "$fx/$can_body" <<MD
+---
+type: document
+title: "Task body — add a hostname alias"
+created: "2026-10-02"
+kva: terminated
+relates_to:
+  - path: ${exitp}
+    kind: kva_terminate
+---
+Add a second hostname alias for the staging host. This work was declined and is kept only as history.
+MD
+  cat > "$fx/$living" <<MD
+---
+type: decision
+title: "No hostname alias for staging"
+created: "2026-10-02"
+kva: alive
+---
+Decision: the staging host keeps a single hostname; extra aliases are not added.
+MD
+  cat > "$fx/$exitp" <<MD
+---
+type: document
+title: "Exit: hostname alias declined"
+created: "2026-10-02"
+kva_role: exit-reason
+kva: alive
+relates_to:
+  - path: ${can_ptr}
+    kind: records
+  - path: ${can_body}
+    kind: records
+  - path: ${living}
+    kind: related
+---
+The hostname alias task was declined; the standing answer is in the linked decision.
+MD
+  cat > "$fx/$done_ptr" <<MD
+---
+type: task
+title: "Rotate log files"
+created: "2026-10-02"
+task_id: ${tdone}
+task_status: done
+body_path: ${done_body}
+kva: alive
+assignees: []
+parent: null
+sub_tasks: []
+relates_to: []
+---
+## Content
+
+Pointer only; completed work keeps its memory alive.
+MD
+  cat > "$fx/$done_body" <<MD
+---
+type: document
+title: "Task body — rotate log files"
+created: "2026-10-02"
+kva: alive
+---
+Rotate the application log files weekly and keep four archives.
+MD
+
+  python3 "$ATLAS_CLI" compile --root "$fx" >/dev/null || { rm -rf "$fx" "$neg"; fail "terminate fixture: compile failed"; }
+
+  local l4='
+import os, re, sys
+root = sys.argv[1]
+expected = set(sys.argv[2:])
+pages = {}
+for d, _, fs in os.walk(root):
+    for f in fs:
+        if not f.endswith(".md"):
+            continue
+        path = os.path.relpath(os.path.join(d, f), root)
+        m = re.match(r"---\n(.*?)\n---", open(os.path.join(d, f)).read(), re.S)
+        if not m:
+            continue
+        fm, edges, cur, in_rel = {}, [], None, False
+        for line in m.group(1).split("\n"):
+            if line.startswith("relates_to:"):
+                in_rel = True
+                continue
+            if in_rel and re.match(r"\s+- path: ", line):
+                cur = {"path": line.split("path:", 1)[1].strip()}
+                edges.append(cur)
+                continue
+            if in_rel and cur is not None and re.match(r"\s+kind: ", line):
+                cur["kind"] = line.split("kind:", 1)[1].strip()
+                continue
+            if line and not line[0].isspace() and not line.startswith("-"):
+                in_rel = False
+                k, _, v = line.partition(":")
+                fm[k.strip()] = v.strip().strip("\"")
+        pages[path] = (fm, edges)
+errs = []
+term = [p for p, (fm, _) in pages.items() if fm.get("kva") == "terminated"]
+if not term:
+    errs.append("no terminated pages")
+if set(term) != expected:
+    errs.append("terminated pages %s do not match the cancelled subjects %s" % (sorted(term), sorted(expected)))
+for p in term:
+    ks = [e for e in pages[p][1] if e.get("kind") == "kva_terminate"]
+    if len(ks) != 1:
+        errs.append(p + ": expected exactly one kva_terminate, got %d" % len(ks))
+        continue
+    tgt = pages.get(ks[0]["path"])
+    if not tgt or tgt[0].get("type") != "document" or tgt[0].get("kva_role") != "exit-reason" or tgt[0].get("kva") != "alive":
+        errs.append(p + ": kva_terminate target is not an alive type: document exit-reason page")
+        continue
+    tgt_edges = [(e.get("kind"), e["path"]) for e in tgt[1]]
+    if ("records", p) not in tgt_edges:
+        errs.append(ks[0]["path"] + ": missing records edge to " + p)
+    if not any(k == "related" and pages.get(t, ({}, []))[0].get("kva") == "alive" for k, t in tgt_edges):
+        errs.append(ks[0]["path"] + ": missing related edge to an alive page")
+targets = []
+for p in term:
+    for e in pages[p][1]:
+        if e.get("kind") == "kva_terminate":
+            targets.append(e["path"])
+if len(set(targets)) != 1:
+    errs.append("terminated subjects must share one exit-reason page, got %d" % len(set(targets)))
+done = [p for p, (fm, _) in pages.items() if fm.get("task_status") == "done"]
+if not done:
+    errs.append("no done task in fixture")
+for p in done:
+    bp = pages[p][0].get("body_path")
+    for q in [p] + ([bp] if bp else []):
+        fm, edges = pages.get(q, ({}, []))
+        if fm.get("kva") == "terminated" or any(e.get("kind") == "kva_terminate" for e in edges):
+            errs.append(q + ": done task or body must not be terminated")
+if errs:
+    print("\n".join(errs))
+    sys.exit(1)
+print("L4 ok: %d terminated page(s), %d done task(s)" % (len(term), len(done)))
+'
+  python3 -c "$l4" "$fx" "$can_ptr" "$can_body" || { rm -rf "$fx" "$neg"; fail "terminate fixture: L4 assertion failed on valid fixture"; }
+
+  cp -R "$fx/." "$neg/"
+  python3 - "$neg/$can_ptr" "$exitp" <<'PY'
+import sys
+p, target = sys.argv[1:3]
+s = open(p).read()
+s = s.replace("    kind: kva_terminate\n", "    kind: kva_terminate\n  - path: %s\n    kind: kva_terminate\n" % target, 1)
+open(p, "w").write(s)
+PY
+  if python3 -c "$l4" "$neg" "$can_ptr" "$can_body" >/dev/null 2>&1; then
+    rm -rf "$fx" "$neg"
+    fail "terminate fixture: L4 assertion must fail with a second kva_terminate edge"
+  fi
+
+  local neg2 exit2
+  neg2=$(mktemp -d)
+  exit2="knowledge/hostname-alias/exit-declined-body.md"
+  cp -R "$fx/." "$neg2/" || { rm -rf "$fx" "$neg" "$neg2"; fail "terminate fixture: copy for shared-exit negative"; }
+  cat > "$neg2/$exit2" <<MD
+---
+type: document
+title: "Exit: hostname alias declined for the body"
+created: "2026-10-02"
+kva_role: exit-reason
+kva: alive
+relates_to:
+  - path: ${can_body}
+    kind: records
+  - path: ${living}
+    kind: related
+---
+The hostname alias task body was declined; the standing answer is in the linked decision.
+MD
+  if ! python3 - "$neg2/$can_body" "$exitp" "$exit2" <<'PY'
+import sys
+path, old, new = sys.argv[1:4]
+text = open(path).read()
+old_edge = "  - path: %s\n    kind: kva_terminate\n" % old
+new_edge = "  - path: %s\n    kind: kva_terminate\n" % new
+if text.count(old_edge) != 1:
+    sys.stderr.write("body page kva_terminate edge not found exactly once\n")
+    sys.exit(1)
+open(path, "w").write(text.replace(old_edge, new_edge, 1))
+PY
+  then
+    rm -rf "$fx" "$neg" "$neg2"
+    fail "terminate fixture: could not repoint body kva_terminate"
+  fi
+  if python3 -c "$l4" "$neg2" "$can_ptr" "$can_body" >/dev/null 2>&1; then
+    rm -rf "$fx" "$neg" "$neg2"
+    fail "terminate fixture: L4 assertion must fail when terminated subjects do not share one exit-reason page"
+  fi
+  local neg3 neg4
+  neg3=$(mktemp -d)
+  neg4=$(mktemp -d)
+  cp -R "$fx/." "$neg3/" && cp -R "$fx/." "$neg4/" \
+    || { rm -rf "$fx" "$neg" "$neg2" "$neg3" "$neg4"; fail "terminate fixture: copy for body/type negatives"; }
+  # Negative: the cancelled body stays alive (no kva_terminate edge).
+  python3 - "$neg3/$can_body" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace("kva: terminated\n", "kva: alive\n", 1)
+s = s.replace("relates_to:\n", "relates_to: []\nx_old_relates_to:\n", 1)
+open(p, "w").write(s)
+PY
+  # Negative: the exit-reason page is not type: document.
+  sed -i '0,/^type: document$/s//type: decision/' "$neg4/$exitp"
+  if python3 -c "$l4" "$neg3" "$can_ptr" "$can_body" >/dev/null 2>&1; then
+    rm -rf "$fx" "$neg" "$neg2" "$neg3" "$neg4"
+    fail "terminate fixture: L4 assertion must fail when the cancelled body stays alive"
+  fi
+  if python3 -c "$l4" "$neg4" "$can_ptr" "$can_body" >/dev/null 2>&1; then
+    rm -rf "$fx" "$neg" "$neg2" "$neg3" "$neg4"
+    fail "terminate fixture: L4 assertion must fail when the exit-reason page is not type: document"
+  fi
+  rm -rf "$fx" "$neg" "$neg2" "$neg3" "$neg4"
+}
+
+check_cancel_terminate_handoff() {
+  local up="$SKILL/references/paths/update.md" cp="$SKILL/references/paths/complete.md"
+  local pat
+  for pat in '<atlas-skill>/references/recipes/terminate-wrong-path\.md' 'once per subject' 'reuses' 'explicitly asked in this turn' 'kva: terminated' 'kva_terminate' 'kva_role: exit-reason' 'kind: records' \
+    'not a duplicate' 'discuss. companion cannot be found' 'A gist is optional'; do
+    grep -qE "^   \*\*8a\. Cancel closes the branch\.\*\*.*${pat}" "$up" || fail "update.md step 8a missing: $pat"
+  done
+  if grep -E '^8\. ' "$up" | grep -q 'kva_terminate'; then fail "update.md step 8 (Duplicate) must not mention kva_terminate"; fi
+  grep -qE '^- Duplicate cancels and `done` never change `kva`' "$up" \
+    || fail "update.md Fail closed must keep: duplicate cancels and done never change kva"
+  grep -qE 'update\*\* → `cancelled`, which runs the terminate handoff' "$cp" \
+    || fail "complete.md must route declined/failed closure to cancelled terminate handoff"
+  grep -qE '^10\. \*\*Status:\*\*.*An explicit, non-duplicate cancel of an existing task through \*\*update\*\* \(→ `cancelled`\) because its goal failed, was declined or is out of scope closes its memory branch via terminate \(update step 8a\)' "$SKILL/SKILL.md" \
+    || fail "SKILL pin 10 must say an explicit non-duplicate update cancel for a failed, declined or out-of-scope goal closes its memory branch"
+  grep -qE 'Creating a task as `cancelled` does not run the terminate handoff; a new task has no memory branch to close\.' \
+    "$SKILL/references/paths/add.md" \
+    || fail "add.md must say creating a task as cancelled does not run the terminate handoff"
+  cancel_terminate_fixture
+  pass "cancel-terminate-handoff"
+}
+run_check cancel-terminate-handoff check_cancel_terminate_handoff
+
+check_done_keeps_kva() {
+  local cp="$SKILL/references/paths/complete.md"
+  grep -qE '^2\. .*Do not change `kva` on the pointer or its body' "$cp" \
+    || fail "complete.md step 2 must not change kva"
+  if grep -q 'kva: terminated' "$cp"; then fail "complete.md must not instruct kva: terminated"; fi
+  grep -qE '^10\. \*\*Status:\*\*.*\*\*add\*\* never terminates, and `done` does not change `kva`' "$SKILL/SKILL.md" \
+    || fail "SKILL pin 10 must say add never terminates and done does not change kva"
+  pass "done-keeps-kva"
+}
+run_check done-keeps-kva check_done_keeps_kva
 
 # ---------------------------------------------------------------------------
 # Full-run fixture: index/compile + relation fixture (ULID-plus-name + task-list root)

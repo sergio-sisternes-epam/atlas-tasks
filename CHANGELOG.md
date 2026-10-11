@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-10-11
+
+### Changed
+
+- Cancelling a task (not a duplicate) because its goal failed, was declined, or is out of scope now closes the task's memory branch through Atlas core's `terminate-wrong-path` recipe (update step 8a). Before, only `task_status: cancelled` was set and the pages stayed `kva: alive`.
+- SKILL pin 10 and complete step 5 now route a declined or failed closure to update → `cancelled`.
+- A gist is optional for the exit-reason page; Atlas compile info `legacy_document` and `missing_gist` on the new pages is expected.
+- SKILL pin 10 is narrowed to the update transition: an explicit, non-duplicate cancel of an existing task because its goal failed, was declined or is out of scope closes its memory branch via terminate, and add never terminates.
+
+### Added
+
+- Fallback: without the `discuss` companion, `task_status: cancelled` is kept, `kva` is unchanged, and the gap is reported.
+- Smoke checks `cancel-terminate-handoff` and `done-keeps-kva`, and scenario `atlas-tasks-adversarial-v5`.
+- `cancel-terminate-handoff` builds a compiled fixture (cancelled and done tasks, living decision, exit-reason page) and runs an L4 assertion over it, plus a negative with a duplicate `kva_terminate` edge.
+- `cancel-terminate-handoff` rejects terminated subjects that do not share one exit-reason page.
+
+### Not changed
+
+- No overlay or schema-key change; no reinstall needed.
+- `done` behaviour is unchanged and does not touch `kva`.
+
 ## [0.6.3] - 2026-10-09
 
 ### Changed
@@ -147,7 +168,8 @@ First public release. No behaviour change.
   removed nested `.apm/skills/atlas-todo/`).
 - Aligned `apm.yml` version with skill metadata at `"0.2.0"`.
 
-[Unreleased]: https://github.com/sergio-sisternes-epam/atlas-tasks/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/sergio-sisternes-epam/atlas-tasks/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/sergio-sisternes-epam/atlas-tasks/releases/tag/v0.6.4
 [0.6.3]: https://github.com/sergio-sisternes-epam/atlas-tasks/releases/tag/v0.6.3
 [0.6.2]: https://github.com/sergio-sisternes-epam/atlas-tasks/releases/tag/v0.6.2
 [0.6.1]: https://github.com/sergio-sisternes-epam/atlas-tasks/releases/tag/v0.6.1
