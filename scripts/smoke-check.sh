@@ -2062,8 +2062,8 @@ check_cancel_terminate_handoff() {
     || fail "update.md Fail closed must keep: duplicate cancels and done never change kva"
   grep -qE 'update\*\* → `cancelled`, which runs the terminate handoff' "$cp" \
     || fail "complete.md must route declined/failed closure to cancelled terminate handoff"
-  grep -qE '^10\. \*\*Status:\*\*.*A non-duplicate cancel of an existing task \(update → `cancelled`\) closes its memory branch via terminate \(update step 8a\)' "$SKILL/SKILL.md" \
-    || fail "SKILL pin 10 must say a non-duplicate cancel of an existing task closes its memory branch via terminate"
+  grep -qE '^10\. \*\*Status:\*\*.*An explicit, non-duplicate cancel of an existing task through \*\*update\*\* \(→ `cancelled`\) because its goal failed, was declined or is out of scope closes its memory branch via terminate \(update step 8a\)' "$SKILL/SKILL.md" \
+    || fail "SKILL pin 10 must say an explicit non-duplicate update cancel for a failed, declined or out-of-scope goal closes its memory branch"
   grep -qE 'Creating a task as `cancelled` does not run the terminate handoff; a new task has no memory branch to close\.' \
     "$SKILL/references/paths/add.md" \
     || fail "add.md must say creating a task as cancelled does not run the terminate handoff"

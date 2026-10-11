@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cancelling a task (not a duplicate) because its goal failed, was declined, or is out of scope now closes the task's memory branch through Atlas core's `terminate-wrong-path` recipe (update step 8a). Before, only `task_status: cancelled` was set and the pages stayed `kva: alive`.
 - SKILL pin 10 and complete step 5 now route a declined or failed closure to update → `cancelled`.
 - A gist is optional for the exit-reason page; Atlas compile info `legacy_document` and `missing_gist` on the new pages is expected.
-- SKILL pin 10 is narrowed to the update transition: a non-duplicate cancel of an existing task closes its memory branch via terminate, and add never terminates.
+- SKILL pin 10 is narrowed to the update transition: an explicit, non-duplicate cancel of an existing task because its goal failed, was declined or is out of scope closes its memory branch via terminate, and add never terminates.
 
 ### Added
 

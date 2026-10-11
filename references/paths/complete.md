@@ -26,7 +26,7 @@ Load `references/paths/activation.md` first. Card `path: complete`.
 2. Set `task_status: done` on the pointer. Keep `body_path`, `related_node`, `assignees`, `parent`, `sub_tasks`, `task_list`, and `relates_to`. Do not change `kva` on the pointer or its body.
 3. Refresh display rows on the owning list / root if maintained as a table; recompute derived blocked for waiters that depended on this task when refreshing.
 4. Compile green.
-5. Do **not** delete body or pointer unless the user asked to cancel/remove (use **update** for `cancelled`, including duplicate → `cancelled` + `relates_to`). If the task closes because its goal was declined or failed rather than achieved, use **update** → `cancelled`, which runs the terminate handoff (update step 8a). `done` does not change `kva`.
+5. Do **not** delete body or pointer unless the user asked to cancel/remove (use **update** for `cancelled`, including duplicate → `cancelled` + `relates_to`). If the task closes because its goal was declined or failed, or is out of scope, rather than achieved, use **update** → `cancelled`, which runs the terminate handoff (update step 8a). `done` does not change `kva`.
 
 ## Non-goals
 
