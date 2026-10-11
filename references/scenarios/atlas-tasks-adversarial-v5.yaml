@@ -1,0 +1,22 @@
+# Adversarial / deterministic smokes — atlas-tasks v0.6.4 (cancel closes the memory branch)
+# Prior adversarial v1 to v4 kept as history under this folder.
+version: 1
+id: atlas-tasks-adversarial-v5
+capability: atlas-tasks
+adversarial: true
+work_id: 2026-10-11-atlas-tasks-cancel-terminate
+packages:
+  - atlas-tasks
+smokes:
+  - id: cancel-terminate-handoff
+    command: "bash scripts/smoke-check.sh . --check cancel-terminate-handoff"
+    expect: "non-duplicate cancelled routes through Atlas terminate-wrong-path with exit-reason page, fallback and optional gist"
+    source: "pin-status-cancel-closes-branch"
+  - id: done-keeps-kva
+    command: "bash scripts/smoke-check.sh . --check done-keeps-kva"
+    expect: "done leaves kva unchanged; complete path has no terminate instruction"
+    source: "pin-status-cancel-closes-branch"
+happy_path:
+  - id: cancel-terminate-compile
+    command: "bash scripts/smoke-check.sh ."
+    expect: "ALL SMOKES GREEN"

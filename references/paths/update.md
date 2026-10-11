@@ -21,6 +21,7 @@ Change an existing task or task list without the complete ritual. Completing →
 - Target is `type: task-list` and the patch includes task-only fields (`task_status`, `body_path`, `related_node`, `assignees`, `parent`, `sub_tasks`, or dependency/`blocks` `relates_to`) → reject based on target type (lists have no status lifecycle)
 - Hierarchy cycle; cross-Atlas parent; unknown parent; non-task dependency target → fail closed; do not leave divergent dual-write
 - List self-link or list-membership cycle (reparenting a list under itself or one of its descendants) → fail closed before any folder move or dual-write
+- Duplicate cancels and `done` never change `kva`; only a non-duplicate cancel runs the terminate handoff (step 8a)
 - Divergent `task_list` vs list `tasks` pair that cannot be repaired in one write → fail closed
 - Setting a **task**'s `task_list` to the root URI → reject before any move or dual-write. Loose root tasks omit the field. Root placement uses the clear-membership branch, not a write of the root URI
 - Copying a target list's task URIs into a pointing list → reject
@@ -44,4 +45,7 @@ Change an existing task or task list without the complete ritual. Completing →
 6. **Dual-write dependency sync:** unchanged from v0.5 (task targets only).
 7. Recompute derived blocked on next **list** / index refresh.
 8. **Duplicate:** prefer `task_status: cancelled` plus `relates_to` the surviving task — not a fifth status.
+
+   **8a. Cancel closes the branch.** When `task_status` becomes `cancelled` (not a duplicate) because the goal failed, was declined, or is out of scope, run the terminate handoff in the same write via Atlas core's recipe `references/recipes/terminate-wrong-path.md` (which loads the `discuss` companion's path `terminate`). `subject_node` = the task pointer and its `body_path` page; `living_node` = the decision or page that holds the standing answer (create it if missing). Each subject gets `kva: terminated` (and `growth: false` if present) plus exactly one `relates_to` `kind: kva_terminate` to the exit-reason page. Write one exit-reason page (`type: document`, `kva_role: exit-reason`, `kva: alive`) with `relates_to` `kind: records` to each subject and `kind: related` to the living page. Pages that only mention the task within a wider topic get a corrected status line plus a `related` link to the exit-reason page, not termination. Keep `task_status: cancelled`; do not delete pages. A gist is optional: `legacy_document` and `missing_gist` info findings on the new pages are expected. L4 (discuss lint, or by read where no lint script is available) and Atlas compile must pass. If the `discuss` companion is not installed, keep `task_status: cancelled`, leave `kva` unchanged, and report that closing the memory branch needs it; do not improvise the terminate artefacts.
+
 9. Compile green.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic smokes for atlas-tasks (v0.6.3 — recall alias + task lists; contract-key-only overlay).
+# Deterministic smokes for atlas-tasks (v0.6.4 — cancel closes the memory branch; recall alias + task lists; contract-key-only overlay).
 # Usage:
 #   smoke-check.sh <atlas-tasks-package-root>
 #   smoke-check.sh <atlas-tasks-package-root> --check <name>
@@ -14,6 +14,7 @@
 #               list-link-does-not-copy-tasks | rename-keeps-ulid-uri |
 #               member-lives-in-list-folder | membership-both-sides | filename-ulid-and-name |
 #               recall-alias | no-mandatory-notes-or-vault-tool |
+#               cancel-terminate-handoff | done-keeps-kva |
 #               (default: all)
 set -euo pipefail
 PKG_ROOT="${1:-}"
@@ -65,7 +66,7 @@ if [[ -z "$CHECK_ONLY" ]]; then
   grep -q '"contribution_id": "atlas-tasks"' "$OVERLAY" || fail "bad contribution_id"
   [[ ! -d "$SKILL/contributions/atlas-todo" ]] || fail "legacy contributions/atlas-todo must be absent"
   grep -qE '^name: atlas-tasks$' "$SKILL/SKILL.md" || fail "SKILL name must be atlas-tasks"
-  grep -qE 'version: "0\.6\.3"' "$PKG_ROOT/apm.yml" || fail "apm.yml version must be 0.6.3"
+  grep -qE 'version: "0\.6\.4"' "$PKG_ROOT/apm.yml" || fail "apm.yml version must be 0.6.4"
   python3 - <<PY || fail "overlay extend-not-replace"
 import json,sys
 o=json.load(open("$OVERLAY"))
@@ -744,21 +745,22 @@ run_check() {
 # ---------------------------------------------------------------------------
 check_package_identity() {
   grep -qE '^name: atlas-tasks$' "$PKG_ROOT/apm.yml" || fail "apm.yml name"
-  grep -qE 'version: "0\.6\.3"' "$PKG_ROOT/apm.yml" || fail "apm.yml version"
+  grep -qE 'version: "0\.6\.4"' "$PKG_ROOT/apm.yml" || fail "apm.yml version"
   grep -qE '^name: atlas-tasks$' "$SKILL/SKILL.md" || fail "SKILL name"
-  grep -qE 'version: "0\.6\.3"' "$SKILL/SKILL.md" || fail "SKILL version"
+  grep -qE 'version: "0\.6\.4"' "$SKILL/SKILL.md" || fail "SKILL version"
   [[ -d "$SKILL/contributions/atlas-tasks" ]] || fail "missing contributions/atlas-tasks"
   [[ ! -d "$SKILL/contributions/atlas-todo" ]] || fail "legacy contributions/atlas-todo present"
   [[ -f "$SKILL/references/paths/migrate.md" ]] || fail "missing migrate path"
   [[ -f "$SKILL/references/scenarios/atlas-tasks-adversarial-v3.yaml" ]] || fail "missing atlas-tasks adversarial v3"
   [[ -f "$SKILL/references/scenarios/atlas-tasks-adversarial-v4.yaml" ]] || fail "missing atlas-tasks adversarial v4"
+  [[ -f "$SKILL/references/scenarios/atlas-tasks-adversarial-v5.yaml" ]] || fail "missing atlas-tasks adversarial v5"
   grep -q 'atlas://' "$SKILL/SKILL.md" || fail "SKILL missing atlas:// identity"
   grep -qE 'tasks/<ULID>|<ULID>-<file-safe-name>' "$SKILL/SKILL.md" || fail "SKILL missing physical path grammar"
   if grep -RE 'todo_id:|todo_status:' "$README_CONTRIB" "$SKILL/references/paths/add.md" 2>/dev/null \
     | grep -vE 'todo_id →|todo_status →|Never write .todo_|legacy|migrate|Hard cut|no .todo_'; then
     fail "contract samples still use todo_id/todo_status"
   fi
-  echo "atlas-tasks 0.6.3"
+  echo "atlas-tasks 0.6.4"
   grep -q 'type: task-list' "$SKILL/SKILL.md" || fail "SKILL missing task-list"
   grep -q 'task_list' "$SKILL/SKILL.md" || fail "SKILL missing task_list field"
   grep -q '<ULID>-<file-safe-name>' "$SKILL/SKILL.md" || fail "SKILL missing ULID-plus-name filename"
@@ -772,7 +774,7 @@ check_package_identity() {
   if grep -nE 'self-reference per skill|may omit or self-reference' "$README_CONTRIB" "$SKILL/references/paths/add.md" 2>/dev/null; then
     fail "docs still allow root task_list self-reference"
   fi
-  pass "package-identity: atlas-tasks 0.6.3"
+  pass "package-identity: atlas-tasks 0.6.4"
 }
 run_check package-identity check_package_identity
 
@@ -1794,6 +1796,35 @@ PY
   pass "clear-membership-reparents-to-root: clear requires root_id; task becomes loose on root; nested list reparents to root"
 }
 run_check clear-membership-reparents-to-root check_clear_membership_reparents_to_root
+
+check_cancel_terminate_handoff() {
+  local up="$SKILL/references/paths/update.md" cp="$SKILL/references/paths/complete.md"
+  local pat
+  for pat in 'terminate-wrong-path\.md' 'kva: terminated' 'kva_terminate' 'kva_role: exit-reason' 'kind: records' \
+    'not a duplicate' 'discuss. companion is not installed' 'A gist is optional'; do
+    grep -qE "^   \*\*8a\. Cancel closes the branch\.\*\*.*${pat}" "$up" || fail "update.md step 8a missing: $pat"
+  done
+  if grep -E '^8\. ' "$up" | grep -q 'kva_terminate'; then fail "update.md step 8 (Duplicate) must not mention kva_terminate"; fi
+  grep -qE '^- Duplicate cancels and `done` never change `kva`' "$up" \
+    || fail "update.md Fail closed must keep: duplicate cancels and done never change kva"
+  grep -qE 'update\*\* → `cancelled`, which runs the terminate handoff' "$cp" \
+    || fail "complete.md must route declined/failed closure to cancelled terminate handoff"
+  grep -qE '^10\. \*\*Status:\*\*.*closes its memory branch via terminate' "$SKILL/SKILL.md" \
+    || fail "SKILL pin 10 must say cancelled closes its memory branch via terminate"
+  pass "cancel-terminate-handoff"
+}
+run_check cancel-terminate-handoff check_cancel_terminate_handoff
+
+check_done_keeps_kva() {
+  local cp="$SKILL/references/paths/complete.md"
+  grep -qE '^2\. .*Do not change `kva` on the pointer or its body' "$cp" \
+    || fail "complete.md step 2 must not change kva"
+  if grep -q 'kva: terminated' "$cp"; then fail "complete.md must not instruct kva: terminated"; fi
+  grep -qE '^10\. \*\*Status:\*\*.*`done` does not change `kva`' "$SKILL/SKILL.md" \
+    || fail "SKILL pin 10 must say done does not change kva"
+  pass "done-keeps-kva"
+}
+run_check done-keeps-kva check_done_keeps_kva
 
 # ---------------------------------------------------------------------------
 # Full-run fixture: index/compile + relation fixture (ULID-plus-name + task-list root)

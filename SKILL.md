@@ -2,7 +2,7 @@
 name: atlas-tasks
 description: Use for distributed Atlas tasks — add/update/complete tasks and task lists, maintain per-Atlas tasks/index.md as the root task list, mount the atlas-tasks overlay on a user-named Atlas, and list/recall task pointers with assignees, hierarchy, task_list membership, relates_to dependency/blocks dual-write and derived blocked. Trigger on atlas-tasks, atlas-todo, tasks index, todo index, add task, add todo, complete task, list tasks, recall tasks, query tasks (deprecated alias of recall), task list, task-list, mount tasks overlay, distributed task, assignees, sub-tasks, depends_on, dependency, blocks, atlas://, ULID. Builds on core Atlas task; does not replace Governor tasks or APM HITL queues.
 metadata:
-  version: "0.6.3"
+  version: "0.6.4"
   status: mvp
   work_id: 2026-10-04-atlas-tasks-task-lists
 ---
@@ -17,6 +17,8 @@ Distributed Atlas **task** discipline. Each participating Atlas has `tasks/index
 
 **v0.6.3** — the read verb is now **recall**, Atlas core's verb; **query** remains a deprecated alias routing to **list**. No page, frontmatter or schema-key change.
 
+**v0.6.4** — a non-duplicate `cancelled` now closes its memory branch through Atlas core's terminate recipe; no frontmatter key or overlay change in atlas-tasks itself.
+
 ## Pins (normative)
 
 1. **Distributed:** every Atlas using this discipline has `tasks/index.md`; tasks may be local or remote; agents coordinate across Atlases.
@@ -28,7 +30,7 @@ Distributed Atlas **task** discipline. Each participating Atlas has `tasks/index
 7. **Hierarchy:** dual-write `parent` (at most one) + `sub_tasks` on the parent; skill keeps both ends in sync; cycles forbidden; **same-Atlas only** (values are `atlas://…/ULID` ids on this store). A parent with children is **not** a task list.
 8. **Dependency:** waiter stores `relates_to: [{ path: <task-id-or-pointer>, kind: dependency }]`; same-Atlas blocker dual-writes `relates_to: [{ path: <waiter>, kind: blocks }]`. Skill syncs both ends on add/update/clear **inside one Atlas**. **Cross-Atlas** dependency targets use `atlas://…/ULID`; write the local waiter edge; do **not** write a remote `kind: blocks` until the reverse-edge pin locks (open protostar). **No `depends_on` field**. Cycles forbidden on the resolvable graph. `blocked_by` is prose-only, not a stored field.
 9. **Blocked:** derived when any waiter `kind: dependency` target has `task_status` ∈ {`open`,`in_progress`}; `done`/`cancelled` clear; empty dependency set → not blocked. **Fail-closed remote:** unknown, unmounted, or unreadable remote target → treat as unresolved / blocked (or path error) — never “ok because missing”. No `task_status: blocked`; no separate boolean.
-10. **Status:** `task_status` is `open` | `in_progress` | `done` | `cancelled`. Duplicate = `cancelled` + `relates_to` the surviving task (not a fifth status). Task lists do not use `task_status` for membership.
+10. **Status:** `task_status` is `open` | `in_progress` | `done` | `cancelled`. Duplicate = `cancelled` + `relates_to` the surviving task (not a fifth status). Task lists do not use `task_status` for membership. A non-duplicate `cancelled` closes its memory branch via terminate (update step 8a); `done` does not change `kva`.
 11. **Identity (v0.5+):** `task_id` **is** `atlas://<atlas_id>/tasks/<ULID>` for tasks **and** task lists → physical file named `<ULID>-<file-safe-name>` (see pin 16). `<atlas_id>` is the scheme-free canonical Atlas id; `<ULID>` is 26-character Crockford. No fragment/query. No kebab `task_id`. No kebab `display_slug`. No slug in the URI.
 12. **Human-facing:** show **title + ULID** (final path segment of the URI). Full `atlas://` URI is fine for tracing; do not invent a kebab stand-in. The file-safe name after the ULID is readable storage only — not the id.
 13. **Hard cut (v0.3):** require `tasks/` + `task_id` / `task_status` only; do not read `todo/`, `todo_id`, or `todo_status`.
