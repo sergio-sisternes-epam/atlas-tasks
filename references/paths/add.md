@@ -17,7 +17,7 @@ Load `references/paths/activation.md` first. Card `path: add`.
 - optional `parent` (one same-Atlas `atlas://…/ULID`) — hierarchy only; does **not** make this a list
 - optional `task_list` — URI of an existing **non-root** task list to join. The root is a task list, but it is not a legal value: for a **loose** task on the root index, omit `task_list` (do not set it to the root URI)
 - optional dependency targets: same-Atlas or cross-Atlas task ids (`atlas://…/ULID`) or same-Atlas pointer paths → stored as `relates_to` `kind: dependency`
-- optional `task_status` (default `open`; allowed: `open` | `in_progress` | `done` | `cancelled`)
+- optional `task_status` (default `open`; allowed: `open` | `in_progress` | `done` | `cancelled`). Creating a task as `cancelled` does not run the terminate handoff; a new task has no memory branch to close.
 - optional `kind: task-list` (or user asks for a “list” / “task list”) — create a task-list page instead of a task
 
 ## Fail closed

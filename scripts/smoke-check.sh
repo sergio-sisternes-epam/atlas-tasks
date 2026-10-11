@@ -1973,6 +1973,13 @@ for p in term:
         errs.append(ks[0]["path"] + ": missing records edge to " + p)
     if not any(k == "related" and pages.get(t, ({}, []))[0].get("kva") == "alive" for k, t in tgt_edges):
         errs.append(ks[0]["path"] + ": missing related edge to an alive page")
+targets = []
+for p in term:
+    for e in pages[p][1]:
+        if e.get("kind") == "kva_terminate":
+            targets.append(e["path"])
+if len(set(targets)) != 1:
+    errs.append("terminated subjects must share one exit-reason page, got %d" % len(set(targets)))
 done = [p for p, (fm, _) in pages.items() if fm.get("task_status") == "done"]
 if not done:
     errs.append("no done task in fixture")
@@ -2001,7 +2008,46 @@ PY
     rm -rf "$fx" "$neg"
     fail "terminate fixture: L4 assertion must fail with a second kva_terminate edge"
   fi
-  rm -rf "$fx" "$neg"
+
+  local neg2 exit2
+  neg2=$(mktemp -d)
+  exit2="knowledge/hostname-alias/exit-declined-body.md"
+  cp -R "$fx/." "$neg2/" || { rm -rf "$fx" "$neg" "$neg2"; fail "terminate fixture: copy for shared-exit negative"; }
+  cat > "$neg2/$exit2" <<MD
+---
+type: document
+title: "Exit: hostname alias declined for the body"
+created: "2026-10-02"
+kva_role: exit-reason
+kva: alive
+relates_to:
+  - path: ${can_body}
+    kind: records
+  - path: ${living}
+    kind: related
+---
+The hostname alias task body was declined; the standing answer is in the linked decision.
+MD
+  if ! python3 - "$neg2/$can_body" "$exitp" "$exit2" <<'PY'
+import sys
+path, old, new = sys.argv[1:4]
+text = open(path).read()
+old_edge = "  - path: %s\n    kind: kva_terminate\n" % old
+new_edge = "  - path: %s\n    kind: kva_terminate\n" % new
+if text.count(old_edge) != 1:
+    sys.stderr.write("body page kva_terminate edge not found exactly once\n")
+    sys.exit(1)
+open(path, "w").write(text.replace(old_edge, new_edge, 1))
+PY
+  then
+    rm -rf "$fx" "$neg" "$neg2"
+    fail "terminate fixture: could not repoint body kva_terminate"
+  fi
+  if python3 -c "$l4" "$neg2" >/dev/null 2>&1; then
+    rm -rf "$fx" "$neg" "$neg2"
+    fail "terminate fixture: L4 assertion must fail when terminated subjects do not share one exit-reason page"
+  fi
+  rm -rf "$fx" "$neg" "$neg2"
 }
 
 check_cancel_terminate_handoff() {
@@ -2016,8 +2062,11 @@ check_cancel_terminate_handoff() {
     || fail "update.md Fail closed must keep: duplicate cancels and done never change kva"
   grep -qE 'update\*\* → `cancelled`, which runs the terminate handoff' "$cp" \
     || fail "complete.md must route declined/failed closure to cancelled terminate handoff"
-  grep -qE '^10\. \*\*Status:\*\*.*closes its memory branch via terminate' "$SKILL/SKILL.md" \
-    || fail "SKILL pin 10 must say cancelled closes its memory branch via terminate"
+  grep -qE '^10\. \*\*Status:\*\*.*A non-duplicate cancel of an existing task \(update → `cancelled`\) closes its memory branch via terminate \(update step 8a\)' "$SKILL/SKILL.md" \
+    || fail "SKILL pin 10 must say a non-duplicate cancel of an existing task closes its memory branch via terminate"
+  grep -qE 'Creating a task as `cancelled` does not run the terminate handoff; a new task has no memory branch to close\.' \
+    "$SKILL/references/paths/add.md" \
+    || fail "add.md must say creating a task as cancelled does not run the terminate handoff"
   cancel_terminate_fixture
   pass "cancel-terminate-handoff"
 }
@@ -2028,8 +2077,8 @@ check_done_keeps_kva() {
   grep -qE '^2\. .*Do not change `kva` on the pointer or its body' "$cp" \
     || fail "complete.md step 2 must not change kva"
   if grep -q 'kva: terminated' "$cp"; then fail "complete.md must not instruct kva: terminated"; fi
-  grep -qE '^10\. \*\*Status:\*\*.*`done` does not change `kva`' "$SKILL/SKILL.md" \
-    || fail "SKILL pin 10 must say done does not change kva"
+  grep -qE '^10\. \*\*Status:\*\*.*\*\*add\*\* never terminates, and `done` does not change `kva`' "$SKILL/SKILL.md" \
+    || fail "SKILL pin 10 must say add never terminates and done does not change kva"
   pass "done-keeps-kva"
 }
 run_check done-keeps-kva check_done_keeps_kva
