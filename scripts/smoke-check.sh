@@ -1929,6 +1929,7 @@ MD
   local l4='
 import os, re, sys
 root = sys.argv[1]
+expected = set(sys.argv[2:])
 pages = {}
 for d, _, fs in os.walk(root):
     for f in fs:
@@ -1959,14 +1960,16 @@ errs = []
 term = [p for p, (fm, _) in pages.items() if fm.get("kva") == "terminated"]
 if not term:
     errs.append("no terminated pages")
+if set(term) != expected:
+    errs.append("terminated pages %s do not match the cancelled subjects %s" % (sorted(term), sorted(expected)))
 for p in term:
     ks = [e for e in pages[p][1] if e.get("kind") == "kva_terminate"]
     if len(ks) != 1:
         errs.append(p + ": expected exactly one kva_terminate, got %d" % len(ks))
         continue
     tgt = pages.get(ks[0]["path"])
-    if not tgt or tgt[0].get("kva_role") != "exit-reason" or tgt[0].get("kva") != "alive":
-        errs.append(p + ": kva_terminate target is not an alive exit-reason page")
+    if not tgt or tgt[0].get("type") != "document" or tgt[0].get("kva_role") != "exit-reason" or tgt[0].get("kva") != "alive":
+        errs.append(p + ": kva_terminate target is not an alive type: document exit-reason page")
         continue
     tgt_edges = [(e.get("kind"), e["path"]) for e in tgt[1]]
     if ("records", p) not in tgt_edges:
@@ -1994,7 +1997,7 @@ if errs:
     sys.exit(1)
 print("L4 ok: %d terminated page(s), %d done task(s)" % (len(term), len(done)))
 '
-  python3 -c "$l4" "$fx" || { rm -rf "$fx" "$neg"; fail "terminate fixture: L4 assertion failed on valid fixture"; }
+  python3 -c "$l4" "$fx" "$can_ptr" "$can_body" || { rm -rf "$fx" "$neg"; fail "terminate fixture: L4 assertion failed on valid fixture"; }
 
   cp -R "$fx/." "$neg/"
   python3 - "$neg/$can_ptr" "$exitp" <<'PY'
@@ -2004,7 +2007,7 @@ s = open(p).read()
 s = s.replace("    kind: kva_terminate\n", "    kind: kva_terminate\n  - path: %s\n    kind: kva_terminate\n" % target, 1)
 open(p, "w").write(s)
 PY
-  if python3 -c "$l4" "$neg" >/dev/null 2>&1; then
+  if python3 -c "$l4" "$neg" "$can_ptr" "$can_body" >/dev/null 2>&1; then
     rm -rf "$fx" "$neg"
     fail "terminate fixture: L4 assertion must fail with a second kva_terminate edge"
   fi
@@ -2043,11 +2046,34 @@ PY
     rm -rf "$fx" "$neg" "$neg2"
     fail "terminate fixture: could not repoint body kva_terminate"
   fi
-  if python3 -c "$l4" "$neg2" >/dev/null 2>&1; then
+  if python3 -c "$l4" "$neg2" "$can_ptr" "$can_body" >/dev/null 2>&1; then
     rm -rf "$fx" "$neg" "$neg2"
     fail "terminate fixture: L4 assertion must fail when terminated subjects do not share one exit-reason page"
   fi
-  rm -rf "$fx" "$neg" "$neg2"
+  local neg3 neg4
+  neg3=$(mktemp -d)
+  neg4=$(mktemp -d)
+  cp -R "$fx/." "$neg3/" && cp -R "$fx/." "$neg4/" \
+    || { rm -rf "$fx" "$neg" "$neg2" "$neg3" "$neg4"; fail "terminate fixture: copy for body/type negatives"; }
+  # Negative: the cancelled body stays alive (no kva_terminate edge).
+  python3 - "$neg3/$can_body" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace("kva: terminated\n", "kva: alive\n", 1)
+s = s.replace("relates_to:\n", "relates_to: []\nx_old_relates_to:\n", 1)
+open(p, "w").write(s)
+PY
+  # Negative: the exit-reason page is not type: document.
+  sed -i '0,/^type: document$/s//type: decision/' "$neg4/$exitp"
+  if python3 -c "$l4" "$neg3" "$can_ptr" "$can_body" >/dev/null 2>&1; then
+    rm -rf "$fx" "$neg" "$neg2" "$neg3" "$neg4"
+    fail "terminate fixture: L4 assertion must fail when the cancelled body stays alive"
+  fi
+  if python3 -c "$l4" "$neg4" "$can_ptr" "$can_body" >/dev/null 2>&1; then
+    rm -rf "$fx" "$neg" "$neg2" "$neg3" "$neg4"
+    fail "terminate fixture: L4 assertion must fail when the exit-reason page is not type: document"
+  fi
+  rm -rf "$fx" "$neg" "$neg2" "$neg3" "$neg4"
 }
 
 check_cancel_terminate_handoff() {
