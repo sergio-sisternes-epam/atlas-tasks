@@ -795,6 +795,30 @@ check_list_folder_index() {
   grep -Fq 'list-folder-index.py' "$SKILL/references/paths/add.md" || fail "add must refresh list-folder index"
   grep -Fq 'list-folder-index.py' "$SKILL/references/paths/update.md" || fail "update must refresh list-folder index"
   pass "list-folder-index: script + pin 23 + add/update/migrate docs"
+  # Review fixes: YAML quoting, flow/unindented sequences, unresolved pointers, bad --list.
+  local F; F="$(mktemp -d)"
+  local A="atlas://example.test/s/atlas/tasks"
+  local UR="01J8E3KBR8V6Z2B9T0V3V4Y5A0" UL="01J8E3KBR8V6Z2B9T0V3V4Y5A1" UT="01J8E3KBR8V6Z2B9T0V3V4Y5A2"
+  local UL2="01J8E3KBR8V6Z2B9T0V3V4Y5A3" UT2="01J8E3KBR8V6Z2B9T0V3V4Y5A4"
+  mkdir -p "$F/tasks/${UL}-logs" "$F/tasks/${UL2}-two"
+  printf -- "---\ntype: task-list\ntitle: Tasks index\ntask_id: %s/%s\ntasks: [%s/%s, %s/%s]\n---\n" "$A" "$UR" "$A" "$UL" "$A" "$UL2" > "$F/tasks/index.md"
+  printf -- "---\ntype: task-list\ntitle: 'Check C:\\\\logs and it''s \"done\"'\ntask_id: %s/%s\ntask_list: %s/%s\ntasks:\n- %s/%s\n---\n" "$A" "$UL" "$A" "$UR" "$A" "$UT" > "$F/tasks/${UL}-logs/${UL}-logs.task-list.md"
+  printf -- "---\ntype: task\ntitle: T\ntask_id: %s/%s\n---\n" "$A" "$UT" > "$F/tasks/${UL}-logs/${UT}-t.md"
+  printf -- "---\ntype: task-list\ntitle: Two\ntask_id: %s/%s\ntask_list: %s/%s\ntasks: [%s/%s]\n---\n" "$A" "$UL2" "$A" "$UR" "$A" "$UT2" > "$F/tasks/${UL2}-two/${UL2}-two.task-list.md"
+  printf -- "---\ntype: task\ntitle: T2\ntask_id: %s/%s\n---\n" "$A" "$UT2" > "$F/tasks/${UL2}-two/${UT2}-t2.md"
+  python3 "$SKILL/scripts/list-folder-index.py" --root "$F" >/dev/null || fail "list-folder-index: flow/unindented sequences must resolve"
+  [[ -f "$F/tasks/${UL2}-two/index.md" ]] || fail "list-folder-index: flow-sequence list not reached"
+  grep -Fq "\`${UT}\`" "$F/tasks/${UL}-logs/index.md" || fail "list-folder-index: unindented block sequence member missing"
+  python3 - "$F/tasks/${UL}-logs/index.md" <<'PY' || fail "list-folder-index: generated frontmatter must be valid YAML keeping backslashes"
+import re,sys,yaml
+t=open(sys.argv[1]).read(); m=re.match(r"^---\n(.*?)\n---\n",t,re.S)
+fm=yaml.safe_load(m.group(1)); assert fm["title"]=="Index: Check C:\\logs and it's \"done\"", fm["title"]; assert "type" not in fm
+PY
+  if python3 "$SKILL/scripts/list-folder-index.py" --root "$F" --list 01J8E3KBR8V6Z2B9T0V3V4Y5ZZ >/dev/null 2>&1; then fail "list-folder-index: unreachable --list must exit nonzero"; fi
+  printf -- "---\ntype: task-list\ntitle: Tasks index\ntask_id: %s/%s\ntasks: [%s/01J8E3KBR8V6Z2B9T0V3V4Y5ZY]\n---\n" "$A" "$UR" "$A" > "$F/tasks/index.md"
+  if python3 "$SKILL/scripts/list-folder-index.py" --root "$F" --dry-run >/dev/null 2>&1; then fail "list-folder-index: unresolved root pointer must exit nonzero"; fi
+  rm -rf "$F"
+  pass "list-folder-index: YAML-safe quoting, flow/unindented sequences, unresolved pointer and bad --list fail closed"
 }
 run_check list-folder-index check_list_folder_index
 

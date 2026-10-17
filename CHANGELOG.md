@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Every non-root task-list folder now carries a generated `index.md` (pin 23): a reserved OKF directory listing with `generated_by: atlas-tasks`, no `type`, linking the list page and its members. Atlas compile's `index_md_present` warning, which fired on every list folder and made `atlas compile` exit 1, stays green.
-- `scripts/list-folder-index.py --root <root> [--dry-run] [--list <ULID>]`: writes or refreshes those indexes by walking pointers from `tasks/index.md`. Idempotent, never deletes, leaves hand-written `index.md` files alone.
+- `scripts/list-folder-index.py --root <root> [--dry-run] [--list <ULID>]`: writes or refreshes those indexes by walking pointers from `tasks/index.md`. Idempotent, never deletes, leaves hand-written `index.md` files alone. Parses frontmatter as YAML (needs PyYAML, as the Atlas CLI does), writes YAML-safe single-quoted scalars, and exits 1 on an unresolved member or root pointer, invalid list frontmatter, or an unreachable `--list` selector.
 - Migrate Checklist E (backfill) and smoke check `list-folder-index`.
 
 ### Changed

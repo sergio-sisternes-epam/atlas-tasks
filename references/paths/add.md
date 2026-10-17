@@ -83,9 +83,10 @@ task_list: "atlas://<atlas_id>/tasks/<PARENT_LIST_ULID>"
 tasks: []
 ```
 
-4. Write the folder `index.md` (pin 23): run `python3 <skill>/scripts/list-folder-index.py --root <root> --list <ULID>` or write the same shape by hand — no `type`, `generated_by: atlas-tasks`, link to the list page, members section. Body section listing members (empty at create). When members are added later, each `tasks` URI must appear as a body mention.
+4. Body section listing members (empty at create). When members are added later, each `tasks` URI must appear as a body mention.
 5. Dual-write: append this list URI to P's `tasks` and mention it in P's body. Do **not** copy any of this list's future members into P.
-6. Compile green. Report list URI, folder path, and parent list.
+6. **After** the dual-write (the helper only reaches lists linked from the root), refresh folder indexes with an **unfiltered** run so both the new list's folder and a non-root parent P's folder are written (pin 23): `python3 <skill>/scripts/list-folder-index.py --root <root>`. Shape if written by hand: no `type`, `generated_by: atlas-tasks`, link to the list page, members section. A nonzero exit means an unresolved pointer — fix it before reporting success.
+7. Compile green. Report list URI, folder path, and parent list.
 
 ## Root index contract (`tasks/index.md`)
 
