@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic smokes for atlas-tasks (v0.6.3 — recall alias + task lists; contract-key-only overlay).
+# Deterministic smokes for atlas-tasks (v0.7.0 — recall alias + task lists; contract-key-only overlay).
 # Usage:
 #   smoke-check.sh <atlas-tasks-package-root>
 #   smoke-check.sh <atlas-tasks-package-root> --check <name>
@@ -13,7 +13,7 @@
 #               task-list-suffix-matches-type | listed-task-not-loose-on-index |
 #               list-link-does-not-copy-tasks | rename-keeps-ulid-uri |
 #               member-lives-in-list-folder | membership-both-sides | filename-ulid-and-name |
-#               recall-alias | no-mandatory-notes-or-vault-tool |
+#               recall-alias | no-mandatory-notes-or-vault-tool | list-folder-index |
 #               (default: all)
 set -euo pipefail
 PKG_ROOT="${1:-}"
@@ -65,7 +65,7 @@ if [[ -z "$CHECK_ONLY" ]]; then
   grep -q '"contribution_id": "atlas-tasks"' "$OVERLAY" || fail "bad contribution_id"
   [[ ! -d "$SKILL/contributions/atlas-todo" ]] || fail "legacy contributions/atlas-todo must be absent"
   grep -qE '^name: atlas-tasks$' "$SKILL/SKILL.md" || fail "SKILL name must be atlas-tasks"
-  grep -qE 'version: "0\.6\.3"' "$PKG_ROOT/apm.yml" || fail "apm.yml version must be 0.6.3"
+  grep -qE 'version: "0\.7\.0"' "$PKG_ROOT/apm.yml" || fail "apm.yml version must be 0.7.0"
   python3 - <<PY || fail "overlay extend-not-replace"
 import json,sys
 o=json.load(open("$OVERLAY"))
@@ -744,9 +744,9 @@ run_check() {
 # ---------------------------------------------------------------------------
 check_package_identity() {
   grep -qE '^name: atlas-tasks$' "$PKG_ROOT/apm.yml" || fail "apm.yml name"
-  grep -qE 'version: "0\.6\.3"' "$PKG_ROOT/apm.yml" || fail "apm.yml version"
+  grep -qE 'version: "0\.7\.0"' "$PKG_ROOT/apm.yml" || fail "apm.yml version"
   grep -qE '^name: atlas-tasks$' "$SKILL/SKILL.md" || fail "SKILL name"
-  grep -qE 'version: "0\.6\.3"' "$SKILL/SKILL.md" || fail "SKILL version"
+  grep -qE 'version: "0\.7\.0"' "$SKILL/SKILL.md" || fail "SKILL version"
   [[ -d "$SKILL/contributions/atlas-tasks" ]] || fail "missing contributions/atlas-tasks"
   [[ ! -d "$SKILL/contributions/atlas-todo" ]] || fail "legacy contributions/atlas-todo present"
   [[ -f "$SKILL/references/paths/migrate.md" ]] || fail "missing migrate path"
@@ -772,7 +772,7 @@ check_package_identity() {
   if grep -nE 'self-reference per skill|may omit or self-reference' "$README_CONTRIB" "$SKILL/references/paths/add.md" 2>/dev/null; then
     fail "docs still allow root task_list self-reference"
   fi
-  pass "package-identity: atlas-tasks 0.6.3"
+  pass "package-identity: atlas-tasks 0.7.0"
 }
 run_check package-identity check_package_identity
 
@@ -787,6 +787,16 @@ check_recall_alias() {
   pass "recall-alias: recall routes to list and query remains deprecated alias"
 }
 run_check recall-alias check_recall_alias
+
+check_list_folder_index() {
+  [[ -x "$SKILL/scripts/list-folder-index.py" ]] || fail "scripts/list-folder-index.py missing or not executable"
+  grep -Fq '23. **List folder index (v0.7):**' "$SKILL/SKILL.md" || fail "SKILL pin 23 missing"
+  grep -Fq 'Checklist E' "$SKILL/references/paths/migrate.md" || fail "migrate Checklist E missing"
+  grep -Fq 'list-folder-index.py' "$SKILL/references/paths/add.md" || fail "add must refresh list-folder index"
+  grep -Fq 'list-folder-index.py' "$SKILL/references/paths/update.md" || fail "update must refresh list-folder index"
+  pass "list-folder-index: script + pin 23 + add/update/migrate docs"
+}
+run_check list-folder-index check_list_folder_index
 
 check_no_mandatory_notes_or_vault_tool() {
   python3 - "$SKILL" <<'PY' || fail "no-mandatory-notes-or-vault-tool"
@@ -1941,15 +1951,6 @@ tasks pointers plus these body mentions. Do not copy nested list members here.
 This list owns its folder; child tasks live beside this file. Parent and sub_tasks
 hierarchy on Child B is separate from list membership.
 MD
-  cat > "$FIX/tasks/${U_LIST}-${N_LIST}/index.md" <<'MD'
----
-type: document
-title: Trip list folder
-created: "2026-10-01"
----
-Index for the trip task-list folder in the atlas-tasks smoke fixture. Holds the
-list page and its member task pointers for pointer-walk discovery tests.
-MD
   cat > "$FIX/tasks/index.md" <<MD
 ---
 type: task-list
@@ -2003,6 +2004,29 @@ assert "$TID_LIST" in block and "$TID_DEMO" in block
 print("root tasks ok")
 PY
   pass "3 index task-list + colocated body + ULID-plus-name pointer + list folder + dependency columns"
+
+  # v0.7 pin 23: generated list-folder index (dry run writes nothing; apply; idempotent rerun).
+  LFI="$SKILL/scripts/list-folder-index.py"
+  python3 "$LFI" --root "$FIX" --dry-run | grep -Fq "would create tasks/${U_LIST}-${N_LIST}/index.md" \
+    || fail "list-folder-index dry run must report would create"
+  [[ ! -e "$FIX/tasks/${U_LIST}-${N_LIST}/index.md" ]] || fail "dry run wrote index.md"
+  python3 "$LFI" --root "$FIX" >/dev/null || fail "list-folder-index apply"
+  idx="$FIX/tasks/${U_LIST}-${N_LIST}/index.md"
+  grep -Fxq "generated_by: atlas-tasks" "$idx" || fail "index.md missing generated_by marker"
+  ! grep -Eq '^type:' "$idx" || fail "list-folder index.md must not carry type (pin 21/23)"
+  grep -Fq "(${U_LIST}-${N_LIST}.task-list.md)" "$idx" || fail "index.md must link the list page"
+  grep -Fq "\`${U_CHILD}\`" "$idx" || fail "index.md must list member ULIDs"
+  python3 "$LFI" --root "$FIX" | grep -Fq "summary: create=0, update=0, ok=1" || fail "list-folder-index not idempotent"
+  pass "4b list-folder-index: dry run, apply, idempotent ($label store)"
+  python3 "$ATLAS_CLI" compile --root "$FIX" --json > "$FIX.compile.json" 2>/dev/null || true
+  python3 - "$FIX.compile.json" <<'PY' || fail "index_md_present still fires on a list folder ($label store)"
+import json,sys
+o=json.load(open(sys.argv[1]))
+bad=[w for w in o.get("warnings",[]) if w.get("id")=="index_md_present" and w.get("path","").startswith("tasks/")]
+assert not bad, bad
+PY
+  rm -f "$FIX.compile.json"
+  pass "4c compile: no index_md_present on list folders ($label store)"
 
   python3 "$ATLAS_CLI" compile --root "$FIX" || fail "compile red on $label store (schema_version=$sv)"
   pass "4 atlas compile green on fixture ($label store, schema_version=$sv)"

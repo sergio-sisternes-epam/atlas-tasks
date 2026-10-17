@@ -44,4 +44,4 @@ Change an existing task or task list without the complete ritual. Completing →
 6. **Dual-write dependency sync:** unchanged from v0.5 (task targets only).
 7. Recompute derived blocked on next **list** / index refresh.
 8. **Duplicate:** prefer `task_status: cancelled` plus `relates_to` the surviving task — not a fifth status.
-9. Compile green.
+9. Refresh the generated `index.md` of every non-root list folder touched by this write (membership, title, rename or folder move; pin 23): `python3 <skill>/scripts/list-folder-index.py --root <root>`. Compile green (`index_md_present` must not fire on a list folder).
