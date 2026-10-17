@@ -71,14 +71,27 @@ def ulid_of(uri: str) -> str | None:
     return m.group(1) if m else None
 
 
-def find_member(folder: Path, ulid: str) -> tuple[Path, str] | None:
-    """Member inside an already-reached list folder: task file or child list folder (ULID prefix)."""
+def contained(root: Path, p: Path) -> bool:
+    """True when p is not a symlink and its resolved path stays inside root."""
+    if p.is_symlink():
+        return False
+    try:
+        p.resolve().relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def find_member(root: Path, folder: Path, ulid: str) -> tuple[Path, str] | None:
+    """Member inside an already-reached list folder: task file or child list folder (ULID prefix).
+    Symlinks and anything resolving outside root are never followed (no writes outside --root)."""
     for p in sorted(folder.iterdir()):
-        if not p.name.startswith(ulid):
+        if not p.name.startswith(ulid) or not contained(root, p):
             continue
         if p.is_dir():
             for f in sorted(p.glob(f"{ulid}*.task-list.md")):
-                return f, "list"
+                if contained(root, f):
+                    return f, "list"
         elif p.suffix == ".md" and not p.name.endswith(".task-list.md"):
             return p, "task"
     return None
@@ -146,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         for uri in uris:
             u = ulid_of(uri)
-            hit = find_member(folder, u) if u else None
+            hit = find_member(root, folder, u) if u else None
             m2: dict = {}
             if hit is not None:
                 try:
@@ -175,6 +188,10 @@ def main(argv: list[str] | None = None) -> int:
         target = folder / "index.md"
         new = render(lf, meta, rows)
         rel = target.relative_to(root)
+        if not contained(root, folder) or (target.exists() or target.is_symlink()) and not contained(root, target):
+            print(f"error: {rel}: symlink or path outside --root; not written", file=sys.stderr)
+            rc = 1
+            continue
         if target.exists():
             old = target.read_text(encoding="utf-8")
             try:

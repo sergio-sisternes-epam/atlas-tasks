@@ -817,6 +817,19 @@ PY
   if python3 "$SKILL/scripts/list-folder-index.py" --root "$F" --list 01J8E3KBR8V6Z2B9T0V3V4Y5ZZ >/dev/null 2>&1; then fail "list-folder-index: unreachable --list must exit nonzero"; fi
   printf -- "---\ntype: task-list\ntitle: Tasks index\ntask_id: %s/%s\ntasks: [%s/01J8E3KBR8V6Z2B9T0V3V4Y5ZY]\n---\n" "$A" "$UR" "$A" > "$F/tasks/index.md"
   if python3 "$SKILL/scripts/list-folder-index.py" --root "$F" --dry-run >/dev/null 2>&1; then fail "list-folder-index: unresolved root pointer must exit nonzero"; fi
+  # Containment: a symlinked list folder or index.md must never redirect writes outside --root.
+  local O; O="$(mktemp -d)"
+  printf -- "---\ntype: task-list\ntitle: Tasks index\ntask_id: %s/%s\ntasks: [%s/%s]\n---\n" "$A" "$UR" "$A" "$UL" > "$F/tasks/index.md"
+  mkdir -p "$O/${UL}-logs"; cp "$F/tasks/${UL}-logs/"*.md "$O/${UL}-logs/"; rm -f "$O/${UL}-logs/index.md"
+  mv "$F/tasks/${UL}-logs" "$F/tasks/moved-away"; ln -s "$O/${UL}-logs" "$F/tasks/${UL}-logs"
+  if python3 "$SKILL/scripts/list-folder-index.py" --root "$F" >/dev/null 2>&1; then fail "list-folder-index: symlinked list folder must fail closed"; fi
+  [[ ! -e "$O/${UL}-logs/index.md" ]] || fail "list-folder-index wrote outside --root via symlinked folder"
+  rm "$F/tasks/${UL}-logs"; mv "$F/tasks/moved-away" "$F/tasks/${UL}-logs"
+  mv "$F/tasks/${UL}-logs/index.md" "$O/outside-index.md"; ln -s "$O/outside-index.md" "$F/tasks/${UL}-logs/index.md"
+  before="$(cat "$O/outside-index.md")"; echo "# changed" >> "$F/tasks/${UL}-logs/${UL}-logs.task-list.md"
+  if python3 "$SKILL/scripts/list-folder-index.py" --root "$F" >/dev/null 2>&1; then fail "list-folder-index: symlinked index.md must fail closed"; fi
+  [[ "$(cat "$O/outside-index.md")" == "$before" ]] || fail "list-folder-index wrote through index.md symlink"
+  rm -rf "$O"
   rm -rf "$F"
   pass "list-folder-index: YAML-safe quoting, flow/unindented sequences, unresolved pointer and bad --list fail closed"
 }
