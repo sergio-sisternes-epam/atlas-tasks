@@ -65,7 +65,7 @@ Never write `todo_id`, `todo_status`, `depends_on`, `display_slug`, or `members`
 6. **Dual-write hierarchy:** if `parent` is set, validate same-Atlas `atlas://`; append this `task_id` to the parent’s `sub_tasks`. Reject cycles and cross-Atlas parents before writing.
 7. **Dual-write membership:** if `task_list` is set, it must name a **non-root** list — reject the root URI before any write (root placement omits the field). Update that list's `tasks` and body mention in the **same write**. If clearing membership to loose, remove from the list and add to the root (and vice versa) — never leave both a child-list row and a loose root row for the same URI, and never store the root URI in `task_list`.
 8. **Dual-write dependency:** for each dependency target, resolve to a task id / pointer; validate `type: task`. On this waiter append `{ path: <blocker>, kind: dependency }`. For **same-Atlas** blockers append `{ path: <this>, kind: blocks }`. For **cross-Atlas** blockers: write the local waiter edge only. Reject cycles and non-task targets before writing.
-9. `atlas compile --root <root>`. Fix red before claiming success.
+9. If the task joined a non-root list, refresh that folder's `index.md` (pin 23; `scripts/list-folder-index.py --root <root> --list <LIST_ULID>`). `atlas compile --root <root>`. Fix red before claiming success.
 10. Report: `task_id` (full URI), ULID, title, body path, task path (`…/<ULID>-<name>.md`), list membership, derived blocked (yes/no).
 
 ## Steps — new task list
@@ -85,7 +85,8 @@ tasks: []
 
 4. Body section listing members (empty at create). When members are added later, each `tasks` URI must appear as a body mention.
 5. Dual-write: append this list URI to P's `tasks` and mention it in P's body. Do **not** copy any of this list's future members into P.
-6. Compile green. Report list URI, folder path, and parent list.
+6. **After** the dual-write (the helper only reaches lists linked from the root), refresh folder indexes with an **unfiltered** run so both the new list's folder and a non-root parent P's folder are written (pin 23): `python3 <skill>/scripts/list-folder-index.py --root <root>`. Shape if written by hand: no `type`, `generated_by: atlas-tasks`, link to the list page, members section. A nonzero exit means an unresolved pointer — fix it before reporting success.
+7. Compile green. Report list URI, folder path, and parent list.
 
 ## Root index contract (`tasks/index.md`)
 

@@ -50,6 +50,12 @@ Prerequisite: the v0.6 `atlas-tasks` overlay is already installed, so `type: tas
 4. List-to-list: pointer only — do not copy nested task URIs.
 5. Compile green. After migrate, skill writes only ULID-plus-name paths; discovery is pointer walk from root only.
 
+## Checklist E — list folder index.md backfill (v0.6 → v0.7)
+
+1. Dry run: `python3 <skill>/scripts/list-folder-index.py --root <root> --dry-run`. It walks pointers from `tasks/index.md` only and prints `would create` / `would update` / `ok` / `skip` per non-root list folder.
+2. Apply: run the same command without `--dry-run`. It is idempotent (rewrites only when content changes), never deletes, and leaves a hand-written `index.md` alone (`skip`; convert it by hand if you want the generated form).
+3. Compile green: `index_md_present` no longer fires on list folders. Commit and push per the store's compile-commit-push hygiene.
+
 ## Fail closed
 
 - Missing Atlas id when applying → `incomplete: missing Atlas id`
