@@ -23,6 +23,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import tempfile
 import time
 from datetime import date, datetime
@@ -883,10 +884,19 @@ def load_store(root: Path) -> Store:
             page = store.pages.get(rel)
             if page is None:
                 page = read_page(root, rel, store)
+                declared = page.meta.get("type")
+                # Filename kind is authoritative for discovery, but a mismatched
+                # declared type must not be rewritten into a task or task-list.
                 if kind == "list":
+                    if declared != "task-list":
+                        raise Fail(f"{rel}: declared type does not match filename")
                     page.kind = "task-list"
                 elif kind == "task":
+                    if declared != "task":
+                        raise Fail(f"{rel}: declared type does not match filename")
                     page.kind = "task"
+                else:
+                    raise Fail(f"{rel}: declared type does not match filename")
                 store.add_page(page)
             if kind == "list" and ulid not in seen_lists:
                 seen_lists.add(ulid)
@@ -922,8 +932,87 @@ def append_mention(body: str, title: str, uri: str, rel: str) -> str:
     return body + f"- {title} — {uri} — {rel}\n"
 
 
-def remove_mention_lines(body: str, uri: str) -> str:
-    return "".join(line for line in body.splitlines(keepends=True) if uri not in line)
+_MEMBER_URI = re.compile(r"atlas://[^\s/]+(?:/[^\s/]+)*/tasks/[0-9A-HJKMNP-TV-Z]{26}")
+
+
+def _isolated_member_line(line: str, uri: str) -> bool:
+    """True when the line is only a list entry for this member.
+
+    An isolated entry is a list item whose only atlas:// URI is ``uri`` and whose
+    remaining text is a title and an optional single path token (``title — URI``
+    or ``title — URI — rel``). Any other prose, or a second member URI, is not
+    separable.
+    """
+    stripped = line.strip()
+    match = re.match(r"^(?:[-*+]|\d+[.)])\s+(.*)$", stripped)
+    if not match:
+        return False
+    rest = match.group(1).strip()
+    if _MEMBER_URI.findall(rest) != [uri]:
+        return False
+    left, right = rest.split(uri, 1)
+    left = left.strip()
+    right = right.strip()
+    if left and not re.fullmatch(r"(?:.+\s*)?[—–-]", left) and not re.fullmatch(r"\[[^\]\n]*\]\(", left):
+        if not re.fullmatch(r"\[[^\]\n]*\]\([^)\n]*\)\s*[—–-]", left):
+            return False
+    if right == "" or right == ")":
+        return True
+    if re.fullmatch(r"[—–-]\s+\S+", right):
+        return True
+    if re.fullmatch(r"\)\s*[—–-]\s+\S+", right):
+        return True
+    return False
+
+
+def remove_mention_lines(body: str, uri: str, where: str) -> str:
+    kept: list[str] = []
+    for line in body.splitlines(keepends=True):
+        if uri not in line:
+            kept.append(line)
+            continue
+        if not _isolated_member_line(line, uri):
+            raise Fail(
+                f"{where}: body mention of {uri} is not an isolated membership entry; edit manually"
+            )
+    return "".join(kept)
+
+
+def list_rename_pairs(old_rel: str, new_rel: str, old_folder: str, new_folder: str) -> list[tuple[str, str]]:
+    """Store-relative paths plus links as seen from the parent list and the root body.
+
+    Parent and root bodies often use a relative folder link or the list-page
+    basename (``<ULID>-trip/<ULID>-trip.task-list.md``) rather than the
+    store-relative folder. Those forms are rewritten in the same one-pass,
+    longest-first replacement as the store-relative paths.
+    """
+    old_page = Path(old_rel).name
+    new_page = Path(new_rel).name
+    old_base = Path(old_folder).name
+    new_base = Path(new_folder).name
+    pairs = [
+        (old_rel, new_rel),
+        (old_folder + "/", new_folder + "/"),
+        (old_folder, new_folder),
+        (f"{old_base}/{old_page}", f"{new_base}/{new_page}"),
+        (old_base + "/", new_base + "/"),
+        (old_page, new_page),
+        (old_base, new_base),
+    ]
+    prefix = "tasks/"
+    if old_folder.startswith(prefix) and new_folder.startswith(prefix):
+        old_from_root = old_folder[len(prefix) :]
+        new_from_root = new_folder[len(prefix) :]
+        old_page_from_root = old_rel[len(prefix) :] if old_rel.startswith(prefix) else ""
+        new_page_from_root = new_rel[len(prefix) :] if new_rel.startswith(prefix) else ""
+        pairs.extend(
+            [
+                (old_page_from_root, new_page_from_root),
+                (old_from_root + "/", new_from_root + "/"),
+                (old_from_root, new_from_root),
+            ]
+        )
+    return pairs
 
 
 def rewrite_paths(store: Store, pairs: list[tuple[str, str]]) -> None:
@@ -970,9 +1059,10 @@ def add_member(owner: Page, title: str, uri: str, rel: str) -> None:
 
 
 def remove_member(owner: Page, uri: str) -> None:
+    new_body = remove_mention_lines(owner.body, uri, owner.rel)
     tasks = [item for item in (owner.meta.get("tasks") or []) if item != uri]
     owner.set_meta("tasks", tasks)
-    owner.set_body(remove_mention_lines(owner.body, uri))
+    owner.set_body(new_body)
 
 
 def append_edge(page: Page, uri: str, kind: str) -> None:
@@ -1302,14 +1392,7 @@ def rename_title(store: Store, page: Page, title: str, affected: list[str]) -> N
             mark(affected, parent_folder)
         return
     move_list_folder(store, page, old_folder, new_folder, new_rel)
-    rewrite_paths(
-        store,
-        [
-            (old_rel, new_rel),
-            (old_folder + "/", new_folder + "/"),
-            (old_folder, new_folder),
-        ],
-    )
+    rewrite_paths(store, list_rename_pairs(old_rel, new_rel, old_folder, new_folder))
     mark(affected, new_folder)
     if parent_folder != "tasks":
         mark(affected, parent_folder)
@@ -1832,7 +1915,29 @@ def read_bytes(root: Path, rel: str) -> bytes | None:
     return path.read_bytes()
 
 
-def atomic_write(root: Path, rel: str, data: bytes) -> None:
+def umask_file_mode() -> int:
+    """Mode a newly created file would receive from open() (0o666 masked by umask)."""
+    mask = os.umask(0)
+    os.umask(mask)
+    return 0o666 & ~mask
+
+
+def path_mode(path: Path) -> int | None:
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        return stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        return None
+
+
+def atomic_write(
+    root: Path,
+    rel: str,
+    data: bytes,
+    mode: int | None = None,
+    created_dirs: list[str] | None = None,
+) -> None:
     dest = safe_path(root, rel)
     parent = dest.parent
     if not parent.exists():
@@ -1843,10 +1948,18 @@ def atomic_write(root: Path, rel: str, data: bytes) -> None:
                 raise Fail("refuse symlink or path outside root")
             if not cur.exists():
                 cur.mkdir(mode=0o755)
+                if created_dirs is not None:
+                    created_dirs.append(cur.relative_to(root).as_posix())
             if cur.is_symlink() or not contained(root, cur):
                 raise Fail("refuse symlink or path outside root")
     if dest.is_symlink():
         raise Fail("refuse symlink or path outside root")
+    # mkstemp is mode 0600 and os.replace keeps that mode. Apply the caller's
+    # mode on the temp file so the destination does not become private.
+    if mode is None:
+        mode = umask_file_mode()
+    else:
+        mode = stat.S_IMODE(mode)
     fd, tmp_name = tempfile.mkstemp(prefix=".tasks-", suffix=".tmp", dir=str(parent))
     committed = False
     try:
@@ -1856,6 +1969,7 @@ def atomic_write(root: Path, rel: str, data: bytes) -> None:
             if written <= 0:
                 raise Fail("write failed")
             view = view[written:]
+        os.fchmod(fd, mode)
         os.fsync(fd)
         os.close(fd)
         fd = -1
@@ -1918,30 +2032,74 @@ def assert_store_unchanged(store: Store, write_ops: list[tuple]) -> None:
         if st.st_mtime_ns != mtime or path.read_bytes() != data:
             raise Fail("fail-closed: store changed during write; retry")
     for action, path, _src, _content in write_ops:
-        if action != "create" or path in store.loaded:
+        if action not in ("create", "move") or path in store.loaded:
             continue
         dest = store.root / path
         if dest.exists() or dest.is_symlink():
             raise Fail("fail-closed: store changed during write; retry")
 
 
+def remove_created_dirs(root: Path, created: list[str]) -> None:
+    """Remove directories this transaction created, and only when they are empty."""
+    ordered = sorted(set(created), key=lambda rel: (rel.count("/"), len(rel)), reverse=True)
+    for rel in ordered:
+        path = root / rel
+        try:
+            if path.is_symlink() or not path.is_dir() or not contained(root, path):
+                continue
+            if any(path.iterdir()):
+                continue
+            path.rmdir()
+        except OSError:
+            continue
+
+
 def apply_ops(root: Path, write_ops: list[tuple]) -> None:
     snapshots: dict[str, bytes | None] = {}
+    modes: dict[str, int | None] = {}
     written: list[str] = []
     deleted: list[str] = []
+    created_dirs: list[str] = []
+
+    def remember(rel: str) -> None:
+        if rel in snapshots:
+            return
+        snapshots[rel] = read_bytes(root, rel)
+        modes[rel] = path_mode(root / rel)
+
+    def write_mode(action: str, path: str, src: str | None) -> int:
+        # Update keeps the destination mode; move keeps the source mode; create
+        # uses the mode umask would give a new file.
+        if action == "update":
+            remembered = modes.get(path)
+            if remembered is not None:
+                return remembered
+        elif action == "move" and src:
+            remembered = modes.get(src)
+            if remembered is not None:
+                return remembered
+        return umask_file_mode()
+
     try:
         for action, path, src, content in write_ops:
-            if action in ("create", "update", "move"):
-                if path not in snapshots:
-                    snapshots[path] = read_bytes(root, path)
-                atomic_write(root, path, content)
-                written.append(path)
+            if action not in ("create", "update", "move"):
+                continue
+            remember(path)
+            if action == "move" and src:
+                remember(src)
+            atomic_write(
+                root,
+                path,
+                content,
+                mode=write_mode(action, path, src),
+                created_dirs=created_dirs,
+            )
+            written.append(path)
         for action, path, src, content in write_ops:
             victim = src if action == "move" else path if action == "delete" else None
             if victim is None:
                 continue
-            if victim not in snapshots:
-                snapshots[victim] = read_bytes(root, victim)
+            remember(victim)
             safe_unlink(root, victim)
             deleted.append(victim)
     except Exception as e:
@@ -1949,7 +2107,7 @@ def apply_ops(root: Path, write_ops: list[tuple]) -> None:
             data = snapshots.get(rel)
             if data is not None:
                 try:
-                    atomic_write(root, rel, data)
+                    atomic_write(root, rel, data, mode=modes.get(rel), created_dirs=created_dirs)
                 except Exception:
                     pass
         for rel in reversed(written):
@@ -1958,9 +2116,10 @@ def apply_ops(root: Path, write_ops: list[tuple]) -> None:
                 if data is None:
                     safe_unlink(root, rel)
                 else:
-                    atomic_write(root, rel, data)
+                    atomic_write(root, rel, data, mode=modes.get(rel), created_dirs=created_dirs)
             except Exception:
                 pass
+        remove_created_dirs(root, created_dirs)
         raise Fail("write failed; rolled back") from e
     for rel in deleted:
         prune_empty(root, rel)

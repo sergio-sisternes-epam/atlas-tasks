@@ -2931,6 +2931,440 @@ if receipt.get("ok") is not False or receipt.get("error") != "fail-closed: unexp
     raise SystemExit(f"unexpected error receipt: {receipt}")
 print("writer internals ok")
 PY
+
+  # 4312989017: rewrite relative folder links and list-page basenames in the same pass.
+  tw_ok "4312989017 add link list" add --root "$FIX" --kind task-list --title "Link list"
+  read -r LINK_ID LINK_ULID LINK_PATH < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["ulid"], o["path"])' "$FIX.tw.out")
+  [[ -n "$LINK_ID" && "$LINK_PATH" == "tasks/${LINK_ULID}-link-list/${LINK_ULID}-link-list.task-list.md" ]] \
+    || fail "4312989017 link list receipt ($label): $(cat "$FIX.tw.out")"
+  python3 - "$FIX/tasks/index.md" "$LINK_ULID" <<'PY' || fail "4312989017 could not inject relative links ($label)"
+import sys
+path, ulid = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+if not text.endswith("\n"):
+    text += "\n"
+text += "[Trip](<%s-link-list/%s-link-list.task-list.md>)\nAlso %s-link-list.task-list.md\n" % (ulid, ulid, ulid)
+open(path, "w", encoding="utf-8").write(text)
+PY
+  tw_ok "4312989017 rename link list" update --root "$FIX" --id "$LINK_ID" --title "Link pack"
+  python3 - "$FIX/tasks/index.md" "$LINK_ULID" <<'PY' || fail "4312989017 relative links not rewritten ($label)"
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+ulid = sys.argv[2]
+old = "%s-link-list" % ulid
+new = "%s-link-pack" % ulid
+if "[Trip](<%s/%s.task-list.md>)" % (new, new) not in text:
+    raise SystemExit("root relative folder link was not rewritten")
+if "Also %s.task-list.md" % new not in text:
+    raise SystemExit("root list-page basename was not rewritten")
+if old in text:
+    raise SystemExit("old relative folder remains in the root body")
+PY
+  [[ ! -e "$FIX/tasks/${LINK_ULID}-link-list" ]] || fail "4312989017 old link folder remains ($label)"
+  [[ -f "$FIX/tasks/${LINK_ULID}-link-pack/${LINK_ULID}-link-pack.task-list.md" ]] \
+    || fail "4312989017 renamed link list missing ($label)"
+  tw_ok "4312989017 add nested link" add --root "$FIX" --kind task-list --title "Nested link" --task-list "$LINK_ID"
+  read -r NEST_ID NEST_ULID NEST_PATH < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["ulid"], o["path"])' "$FIX.tw.out")
+  [[ "$NEST_PATH" == "tasks/${LINK_ULID}-link-pack/${NEST_ULID}-nested-link/${NEST_ULID}-nested-link.task-list.md" ]] \
+    || fail "4312989017 nested path ($NEST_PATH)"
+  python3 - "$FIX/tasks/index.md" "$FIX/tasks/${LINK_ULID}-link-pack/${LINK_ULID}-link-pack.task-list.md" \
+    "$LINK_ULID" "$NEST_ULID" <<'PY' || fail "4312989017 could not inject nested relative links ($label)"
+import sys
+root_p, parent_p, link_ulid, nest = sys.argv[1:]
+root = open(root_p, encoding="utf-8").read()
+parent = open(parent_p, encoding="utf-8").read()
+if not root.endswith("\n"):
+    root += "\n"
+if not parent.endswith("\n"):
+    parent += "\n"
+root += "[Trip](<%s-link-pack/%s-nested-link/%s-nested-link.task-list.md>)\n" % (link_ulid, nest, nest)
+parent += "[Trip](<%s-nested-link/%s-nested-link.task-list.md>)\nAlso %s-nested-link.task-list.md\n" % (nest, nest, nest)
+open(root_p, "w", encoding="utf-8").write(root)
+open(parent_p, "w", encoding="utf-8").write(parent)
+PY
+  tw_ok "4312989017 rename nested link" update --root "$FIX" --id "$NEST_ID" --title "Nested pack"
+  python3 - "$FIX/tasks/index.md" "$FIX/tasks/${LINK_ULID}-link-pack/${LINK_ULID}-link-pack.task-list.md" \
+    "$LINK_ULID" "$NEST_ULID" <<'PY' || fail "4312989017 nested relative links not rewritten ($label)"
+import sys
+root = open(sys.argv[1], encoding="utf-8").read()
+parent = open(sys.argv[2], encoding="utf-8").read()
+link_ulid, nest = sys.argv[3:]
+old = "%s-nested-link" % nest
+new_root = "[Trip](<%s-link-pack/%s-nested-pack/%s-nested-pack.task-list.md>)" % (link_ulid, nest, nest)
+new_parent = "[Trip](<%s-nested-pack/%s-nested-pack.task-list.md>)" % (nest, nest)
+if new_root not in root:
+    raise SystemExit("root-relative nested link was not rewritten")
+if new_parent not in parent or "Also %s-nested-pack.task-list.md" % nest not in parent:
+    raise SystemExit("parent-relative nested link was not rewritten")
+if old in root or old in parent:
+    raise SystemExit("old nested folder token remains")
+PY
+  [[ ! -e "$FIX/tasks/${LINK_ULID}-link-pack/${NEST_ULID}-nested-link" ]] \
+    || fail "4312989017 old nested folder remains ($label)"
+  # The rewrite is asserted above. Drop the injected links so compile does not
+  # treat the angle-bracket destinations as store paths.
+  python3 - "$FIX/tasks/index.md" "$FIX/tasks/${LINK_ULID}-link-pack/${LINK_ULID}-link-pack.task-list.md" <<'PY' \
+    || fail "4312989017 could not drop injected links ($label)"
+import sys
+for path in sys.argv[1:]:
+    lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
+    kept = [line for line in lines if not line.startswith("[Trip](") and not line.startswith("Also ")]
+    open(path, "w", encoding="utf-8").write("".join(kept))
+PY
+  pass "4312989017 relative rename links ($label)"
+
+  # 4312988824: create uses umask; update keeps the destination mode; move keeps the source mode.
+  (
+    umask 027
+    tw_ok "4312988824 umask create" add --root "$FIX" --title "Umask task" \
+      --related-node "$RELATED" --body "$BODY"
+  ) || fail "4312988824 umask create failed ($label)"
+  read -r UMASK_ID UMASK_PATH < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["path"])' "$FIX.tw.out")
+  python3 - "$FIX/$UMASK_PATH" <<'PY' || fail "4312988824 new file mode ($label)"
+import os, stat, sys
+mode = stat.S_IMODE(os.stat(sys.argv[1]).st_mode)
+if mode != 0o640:
+    raise SystemExit("create mode %s, expected 0o640" % oct(mode))
+PY
+  chmod 604 "$FIX/$UMASK_PATH"
+  tw_ok "4312988824 status keeps mode" update --root "$FIX" --id "$UMASK_ID" --status in_progress
+  python3 - "$FIX/$UMASK_PATH" <<'PY' || fail "4312988824 update did not keep destination mode ($label)"
+import os, stat, sys
+mode = stat.S_IMODE(os.stat(sys.argv[1]).st_mode)
+if mode != 0o604:
+    raise SystemExit("update mode %s, expected 0o604" % oct(mode))
+PY
+  tw_ok "4312988824 add exec list" add --root "$FIX" --kind task-list --title "Exec list"
+  read -r EXEC_ID EXEC_ULID < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["ulid"])' "$FIX.tw.out")
+  EXEC_DIR="$FIX/tasks/${EXEC_ULID}-exec-list"
+  printf '#!/bin/sh\necho ok\n' > "$EXEC_DIR/run.sh"
+  chmod 755 "$EXEC_DIR/run.sh"
+  chmod 640 "$EXEC_DIR/${EXEC_ULID}-exec-list.task-list.md"
+  tw_ok "4312988824 rename exec list" update --root "$FIX" --id "$EXEC_ID" --title "Exec renamed"
+  python3 - "$FIX/tasks/${EXEC_ULID}-exec-renamed/run.sh" \
+    "$FIX/tasks/${EXEC_ULID}-exec-renamed/${EXEC_ULID}-exec-renamed.task-list.md" <<'PY' \
+    || fail "4312988824 move did not keep source mode ($label)"
+import os, stat, sys
+aux = stat.S_IMODE(os.stat(sys.argv[1]).st_mode)
+page = stat.S_IMODE(os.stat(sys.argv[2]).st_mode)
+if aux != 0o755:
+    raise SystemExit("aux mode %s, expected 0o755" % oct(aux))
+if page != 0o640:
+    raise SystemExit("moved page mode %s, expected 0o640" % oct(page))
+PY
+  [[ ! -e "$EXEC_DIR" ]] || fail "4312988824 old exec folder remains ($label)"
+  pass "4312988824 file modes preserved ($label)"
+
+  # 4312988978: remove only an isolated membership entry; otherwise tell the caller to edit manually.
+  tw_ok "4312988978 add mention list" add --root "$FIX" --kind task-list --title "Mention list"
+  read -r MEN_LIST_ID MEN_LIST_ULID MEN_LIST_PATH < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["ulid"], o["path"])' "$FIX.tw.out")
+  tw_ok "4312988978 add clean member" add --root "$FIX" --title "Clean member" \
+    --related-node "$RELATED" --body "$BODY" --task-list "$MEN_LIST_ID"
+  read -r CLEAN_ID < <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task_id"])' "$FIX.tw.out")
+  printf '\nPacking notes stay.\n' >> "$FIX/$MEN_LIST_PATH"
+  tw_ok "4312988978 clear isolated" update --root "$FIX" --id "$CLEAN_ID" --clear-task-list
+  python3 - "$FIX/$MEN_LIST_PATH" "$CLEAN_ID" <<'PY' || fail "4312988978 isolated removal ($label)"
+import re, sys, yaml
+text = open(sys.argv[1], encoding="utf-8").read()
+uri = sys.argv[2]
+if uri in text:
+    raise SystemExit("member URI still in the list body")
+if "Packing notes stay." not in text:
+    raise SystemExit("unrelated prose was removed")
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+if uri in (meta.get("tasks") or []):
+    raise SystemExit("member still in frontmatter")
+PY
+  tw_ok "4312988978 add mixed member" add --root "$FIX" --title "Mixed member" \
+    --related-node "$RELATED" --body "$BODY" --task-list "$MEN_LIST_ID"
+  read -r MIX_ID < <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task_id"])' "$FIX.tw.out")
+  tw_ok "4312988978 add other member" add --root "$FIX" --title "Other member" \
+    --related-node "$RELATED" --body "$BODY" --task-list "$MEN_LIST_ID"
+  read -r OTHER_ID < <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task_id"])' "$FIX.tw.out")
+  printf '\n- Remember %s and also %s before departure.\n' "$MIX_ID" "$OTHER_ID" >> "$FIX/$MEN_LIST_PATH"
+  before="$(hash_tree "$FIX")"
+  tw_run "4312988978 unsafe mention" update --root "$FIX" --id "$MIX_ID" --clear-task-list
+  after="$(hash_tree "$FIX")"
+  [[ "$TW_RC" -ne 0 ]] || fail "4312988978 unsafe mention was accepted ($label)"
+  [[ "$before" == "$after" ]] || fail "4312988978 unsafe mention changed the tree ($label)"
+  grep -Fq "edit manually" "$FIX.tw.out" || fail "4312988978 missing edit manually ($label): $(cat "$FIX.tw.out")"
+  python3 - "$FIX/$MEN_LIST_PATH" <<'PY' || fail "4312988978 could not drop the unsafe line ($label)"
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+kept = [line for line in text.splitlines(keepends=True) if "before departure" not in line]
+open(path, "w", encoding="utf-8").write("".join(kept))
+PY
+  pass "4312988978 isolated membership lines ($label)"
+
+  # 4312988939: a reachable page whose declared type disagrees with its filename must fail closed.
+  cp "$FIX/tasks/index.md" "$FIX.index.type.bak"
+  BAD_DOC="01J8E3KDT0X8B4D1W2X5Y6Z7F6"
+  BAD_DOC_ID="atlas://${AID}/tasks/${BAD_DOC}"
+  python3 - "$FIX" "$BAD_DOC_ID" "$BAD_DOC" <<'PY' || fail "4312988939 could not install document member ($label)"
+import re, sys
+from pathlib import Path
+fix, uri, ulid = sys.argv[1:]
+root = Path(fix)
+idx = root / "tasks" / "index.md"
+text = idx.read_text(encoding="utf-8")
+m = re.match(r"^---\n(.*?)\n---", text, re.S)
+if not m or not re.search(r"^tasks:\n", m.group(1), re.M):
+    raise SystemExit("root tasks block missing")
+inner = re.sub(r"^tasks:\n", "tasks:\n  - %s\n" % uri, m.group(1), count=1, flags=re.M)
+idx.write_text("---\n" + inner + "\n---" + text[m.end():], encoding="utf-8")
+(root / "tasks" / ("%s-doc.md" % ulid)).write_text(
+    "---\ntype: document\ntitle: Not a task\ntask_id: %s\n---\n" % uri,
+    encoding="utf-8",
+)
+PY
+  before="$(hash_tree "$FIX")"
+  tw_run "4312988939 document member" update --root "$FIX" --id "$TID_DEMO" --title "Demo typecheck"
+  after="$(hash_tree "$FIX")"
+  [[ "$TW_RC" -ne 0 ]] || fail "4312988939 document member was accepted ($label)"
+  [[ "$before" == "$after" ]] || fail "4312988939 document member changed the tree ($label)"
+  grep -Fq "declared type does not match filename" "$FIX.tw.out" \
+    || fail "4312988939 document member error ($label): $(cat "$FIX.tw.out" "$FIX.tw.err")"
+  cp "$FIX.index.type.bak" "$FIX/tasks/index.md"
+  rm -f "$FIX/tasks/${BAD_DOC}-doc.md"
+  BAD_LIST="01J8E3KDT0X8B4D1W2X5Y6Z7F7"
+  BAD_LIST_ID="atlas://${AID}/tasks/${BAD_LIST}"
+  python3 - "$FIX" "$BAD_LIST_ID" "$BAD_LIST" <<'PY' || fail "4312988939 could not install misdeclared list ($label)"
+import re, sys
+from pathlib import Path
+fix, uri, ulid = sys.argv[1:]
+root = Path(fix)
+idx = root / "tasks" / "index.md"
+text = idx.read_text(encoding="utf-8")
+m = re.match(r"^---\n(.*?)\n---", text, re.S)
+if not m or not re.search(r"^tasks:\n", m.group(1), re.M):
+    raise SystemExit("root tasks block missing")
+inner = re.sub(r"^tasks:\n", "tasks:\n  - %s\n" % uri, m.group(1), count=1, flags=re.M)
+idx.write_text("---\n" + inner + "\n---" + text[m.end():], encoding="utf-8")
+folder = root / "tasks" / ("%s-badlist" % ulid)
+folder.mkdir()
+(folder / ("%s-badlist.task-list.md" % ulid)).write_text(
+    "---\ntype: task\ntitle: Bad list\ntask_id: %s\ntasks: []\n---\n" % uri,
+    encoding="utf-8",
+)
+PY
+  before="$(hash_tree "$FIX")"
+  tw_run "4312988939 misdeclared list" add --root "$FIX" --title "Should not land" \
+    --related-node "$RELATED" --body "$BODY" --task-list "$BAD_LIST_ID"
+  after="$(hash_tree "$FIX")"
+  [[ "$TW_RC" -ne 0 ]] || fail "4312988939 misdeclared list was accepted ($label)"
+  [[ "$before" == "$after" ]] || fail "4312988939 misdeclared list changed the tree ($label)"
+  grep -Fq "declared type does not match filename" "$FIX.tw.out" \
+    || fail "4312988939 misdeclared list error ($label): $(cat "$FIX.tw.out" "$FIX.tw.err")"
+  cp "$FIX.index.type.bak" "$FIX/tasks/index.md"
+  rm -rf "$FIX/tasks/${BAD_LIST}-badlist"
+  rm -f "$FIX.index.type.bak"
+  tw_ok "4312988939 store loads" update --root "$FIX" --id "$TID_DEMO" --status open --dry-run
+  pass "4312988939 declared type matches filename ($label)"
+
+  # 4312988869 move destinations, 4312988911 index reads, 4312989062 created dirs, mode rollback.
+  python3 - "$TW" "$LFI" "$FIX" "$MEN_LIST_PATH" "$MIX_ID" <<'PY' || fail "4312988824/4312988869/4312988911/4312989062 regressions ($label)"
+import importlib.util, io, json, os, stat, sys
+from pathlib import Path
+
+tw, lfi_path, fix, list_rel, mix_id = sys.argv[1:]
+root = Path(fix)
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+mod = load("tasks_review_regress", tw)
+lfi = load("lfi_review_regress", lfi_path)
+
+# 4312988824: rollback restores the destination mode after a failed update.
+target = root / "tasks" / "mode-keep-4312988824.txt"
+target.write_bytes(b"old\n")
+os.chmod(target, 0o640)
+real_replace = os.replace
+
+def boom_mode(src, dst):
+    if str(dst).endswith("mode-fail-4312988824.txt"):
+        raise OSError("boom")
+    return real_replace(src, dst)
+
+os.replace = boom_mode
+try:
+    try:
+        mod.apply_ops(root, [
+            ("update", "tasks/mode-keep-4312988824.txt", None, b"new\n"),
+            ("create", "tasks/mode-fail-4312988824.txt", None, b"x"),
+        ])
+    except mod.Fail as exc:
+        if "rolled back" not in exc.message:
+            raise SystemExit("4312988824 unexpected rollback error: %s" % exc.message)
+    else:
+        raise SystemExit("4312988824 mode rollback did not fail closed")
+finally:
+    os.replace = real_replace
+if target.read_bytes() != b"old\n" or stat.S_IMODE(target.stat().st_mode) != 0o640:
+    raise SystemExit("4312988824 rollback did not restore destination mode")
+if (root / "tasks" / "mode-fail-4312988824.txt").exists():
+    raise SystemExit("4312988824 failed create was left behind")
+target.unlink()
+
+# 4312988869: a move destination created after planning fails closed.
+store = mod.load_store(root)
+mod.assert_store_unchanged(store, [("move", "tasks/absent-4312988869.txt", "tasks/index.md", b"x")])
+race = root / "tasks" / "race-4312988869.txt"
+race.write_text("raced\n", encoding="utf-8")
+try:
+    try:
+        mod.assert_store_unchanged(store, [("move", "tasks/race-4312988869.txt", "tasks/old.txt", b"x")])
+    except mod.Fail as exc:
+        if "store changed during write" not in exc.message:
+            raise SystemExit("4312988869 unexpected error: %s" % exc.message)
+    else:
+        raise SystemExit("4312988869 move destination was not checked")
+finally:
+    race.unlink()
+
+# 4312988911: render from the list page and member pointers; do not copy the subtree.
+lfi_src = Path(lfi_path).read_text(encoding="utf-8")
+for banned in ("copytree", "mkdtemp", "_copy_tree_nofollow", "shutil", "tempfile"):
+    if banned in lfi_src:
+        raise SystemExit("4312988911 list-folder-index still references %s" % banned)
+folder = root / Path(list_rel).parent
+attach = folder / "huge.bin"
+attach.write_bytes(b"not-a-member")
+list_file = root / list_rel
+meta, _body = lfi.frontmatter(list_file.read_text(encoding="utf-8"))
+rows = []
+for uri in lfi.members_of(meta, list_rel):
+    ulid = lfi.ulid_of(uri)
+    hit = lfi.find_member(root, list_file.parent, ulid)
+    if hit is None:
+        raise SystemExit("4312988911 member %s not found" % uri)
+    path, kind = hit
+    member_meta, _b = lfi.frontmatter(path.read_text(encoding="utf-8"))
+    rows.append((ulid, kind, path.relative_to(list_file.parent).as_posix(), member_meta.get("title") or path.stem))
+expected = lfi.render(list_file, meta, rows)
+got, err = lfi.render_list_folder_index(root, list_rel, None)
+if err or got != expected:
+    raise SystemExit("4312988911 render mismatch: %s" % err)
+reads = []
+real_rt, real_rb, real_open = Path.read_text, Path.read_bytes, Path.open
+
+def tracked_text(self, *args, **kwargs):
+    reads.append(self.name)
+    if self.name == "huge.bin":
+        raise SystemExit("4312988911 read attachment text")
+    return real_rt(self, *args, **kwargs)
+
+def tracked_bytes(self, *args, **kwargs):
+    reads.append(self.name)
+    if self.name == "huge.bin":
+        raise SystemExit("4312988911 read attachment bytes")
+    return real_rb(self, *args, **kwargs)
+
+def tracked_open(self, *args, **kwargs):
+    reads.append(self.name)
+    if self.name == "huge.bin":
+        raise SystemExit("4312988911 opened attachment")
+    return real_open(self, *args, **kwargs)
+
+Path.read_text, Path.read_bytes, Path.open = tracked_text, tracked_bytes, tracked_open
+try:
+    got, err = lfi.render_list_folder_index(root, list_rel, None)
+    if err or got != expected:
+        raise SystemExit("4312988911 hooked render failed: %s" % err)
+    if "huge.bin" in reads:
+        raise SystemExit("4312988911 render read %s" % reads)
+    buf, err_io = io.StringIO(), io.StringIO()
+    old, old_e = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = buf, err_io
+    try:
+        rc = mod.main(["update", "--root", str(root), "--id", mix_id, "--title", "Mixed dry", "--dry-run"])
+    finally:
+        sys.stdout, sys.stderr = old, old_e
+    if rc != 0 or "huge.bin" in reads:
+        raise SystemExit("4312988911 dry-run rc=%s reads=%s out=%s err=%s" % (rc, reads, buf.getvalue(), err_io.getvalue()))
+    receipt = json.loads(buf.getvalue())
+    if receipt.get("dry_run") is not True:
+        raise SystemExit("4312988911 dry-run receipt: %s" % receipt)
+finally:
+    Path.read_text, Path.read_bytes, Path.open = real_rt, real_rb, real_open
+attach.unlink()
+overlay_ulid = "01J8E3KDT0X8B4D1W2X5Y6Z7F8"
+member_ulid = "01J8E3KDT0X8B4D1W2X5Y6Z7F9"
+new_rel = "tasks/%s-overlay/%s-overlay.task-list.md" % (overlay_ulid, overlay_ulid)
+member_rel = "tasks/%s-overlay/%s-item.md" % (overlay_ulid, member_ulid)
+overlay = {
+    new_rel: "---\ntype: task-list\ntitle: Overlay list\ntask_id: atlas://ex/tasks/%s\ntasks:\n  - atlas://ex/tasks/%s\n---\n" % (overlay_ulid, member_ulid),
+    member_rel: "---\ntype: task\ntitle: Overlay item\ntask_id: atlas://ex/tasks/%s\n---\n" % member_ulid,
+}
+got, err = lfi.render_list_folder_index(root, new_rel, overlay)
+if err or "Overlay item" not in got or (root / "tasks" / ("%s-overlay" % overlay_ulid)).exists():
+    raise SystemExit("4312988911 overlay render wrote or failed: %s" % err)
+
+# 4312989062: rollback removes only directories this transaction created, and only when empty.
+pre = root / "tasks" / "empty-pre-4312989062"
+pre.mkdir()
+
+def boom_dir(src, dst):
+    if "created-by-tx" in str(dst):
+        raise OSError("boom")
+    return real_replace(src, dst)
+
+os.replace = boom_dir
+try:
+    try:
+        mod.apply_ops(root, [
+            ("create", "tasks/empty-pre-4312989062/made.md", None, b"x"),
+            ("create", "tasks/created-by-tx/page.md", None, b"y"),
+        ])
+    except mod.Fail as exc:
+        if "rolled back" not in exc.message:
+            raise SystemExit("4312989062 unexpected rollback error: %s" % exc.message)
+    else:
+        raise SystemExit("4312989062 created-dir rollback did not fail closed")
+finally:
+    os.replace = real_replace
+if not pre.is_dir() or (pre / "made.md").exists() or (root / "tasks" / "created-by-tx").exists():
+    raise SystemExit("4312989062 rollback removed a pre-existing dir or left a created dir")
+pre.rmdir()
+
+def boom_retry(src, dst):
+    if "rollback-list" in str(dst):
+        raise OSError("boom")
+    return real_replace(src, dst)
+
+os.replace = boom_retry
+buf, err_io = io.StringIO(), io.StringIO()
+old, old_e = sys.stdout, sys.stderr
+sys.stdout, sys.stderr = buf, err_io
+try:
+    rc = mod.main(["add", "--root", str(root), "--kind", "task-list", "--title", "Rollback list"])
+finally:
+    sys.stdout, sys.stderr = old, old_e
+    os.replace = real_replace
+if rc == 0 or "rolled back" not in buf.getvalue():
+    raise SystemExit("4312989062 failed create rc=%s out=%s err=%s" % (rc, buf.getvalue(), err_io.getvalue()))
+left = list((root / "tasks").glob("*rollback-list*"))
+if left:
+    raise SystemExit("4312989062 left %s" % left)
+buf, err_io = io.StringIO(), io.StringIO()
+sys.stdout, sys.stderr = buf, err_io
+try:
+    rc = mod.main(["add", "--root", str(root), "--kind", "task-list", "--title", "Rollback list"])
+finally:
+    sys.stdout, sys.stderr = old, old_e
+if rc != 0:
+    raise SystemExit("4312989062 retry failed rc=%s out=%s err=%s" % (rc, buf.getvalue(), err_io.getvalue()))
+receipt = json.loads(buf.getvalue())
+if not receipt.get("ok") or not (root / receipt["path"]).is_file():
+    raise SystemExit("4312989062 retry receipt: %s" % receipt)
+print("second-review regressions ok")
+PY
+  pass "4312988824/4312988869/4312988911/4312989062 regressions ($label)"
+
   rm -f "$FIX.tw.out" "$FIX.tw.err" "$FIX.writer.out" "$FIX.writer.err" \
     "$FIX.shared.out" "$FIX.shared.err" "$FIX.lock.add.out" "$FIX.lock.add.err" \
     "$FIX.lock.holder.out" "$FIX.lock.holder.err" "$FIX.lock.ready" "$FIX.lock.release" \

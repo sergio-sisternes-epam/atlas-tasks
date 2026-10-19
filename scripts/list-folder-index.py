@@ -20,9 +20,7 @@ from __future__ import annotations
 
 import argparse
 import re
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 try:
@@ -128,17 +126,84 @@ def render(list_file: Path, meta: dict, rows: list[tuple[str, str, str, str]]) -
     return "\n".join(lines) + "\n"
 
 
-def _copy_tree_nofollow(root: Path, src: Path, dst: Path) -> None:
-    """Copy a directory tree without following symlinks or leaving root."""
-    dst.mkdir(parents=True, exist_ok=True)
-    for child in src.iterdir():
-        if child.is_symlink() or not contained(root, child):
+def _overlay_norm(overlay: dict[str, str | None] | None) -> dict[str, str | None]:
+    out: dict[str, str | None] = {}
+    for key, value in (overlay or {}).items():
+        out[str(key).replace("\\", "/").lstrip("/")] = value
+    return out
+
+
+def _child_rel(folder_rel: str, name: str) -> str:
+    if folder_rel in ("", "."):
+        return name
+    return f"{folder_rel.rstrip('/')}/{name}"
+
+
+def _direct_entries(root: Path, folder_rel: str, overlay: dict[str, str | None]) -> list[tuple[str, str]]:
+    """Direct child names after overlay, without reading file bytes."""
+    kinds: dict[str, str] = {}
+    folder = root if folder_rel in ("", ".") else root / folder_rel
+    if folder.exists() and not folder.is_symlink() and folder.is_dir() and contained(root, folder):
+        for child in folder.iterdir():
+            if child.is_symlink() or not contained(root, child):
+                continue
+            if child.is_dir():
+                kinds[child.name] = "dir"
+            elif child.is_file():
+                kinds[child.name] = "file"
+    prefix = "" if folder_rel in ("", ".") else folder_rel.rstrip("/") + "/"
+    for rel, content in overlay.items():
+        if prefix:
+            if not rel.startswith(prefix):
+                continue
+            rest = rel[len(prefix) :]
+        else:
+            rest = rel
+        if not rest or rest.startswith("../") or "/../" in f"/{rest}":
             continue
-        target = dst / child.name
-        if child.is_dir():
-            _copy_tree_nofollow(root, child, target)
-        elif child.is_file():
-            target.write_bytes(child.read_bytes())
+        name = rest.split("/", 1)[0]
+        if not name or name in (".", ".."):
+            continue
+        if "/" in rest:
+            if content is not None:
+                kinds[name] = "dir"
+            continue
+        if content is None:
+            kinds.pop(name, None)
+        else:
+            kinds[name] = "file"
+    return sorted(kinds.items())
+
+
+def _page_text(root: Path, rel: str, overlay: dict[str, str | None]) -> str | None:
+    if rel in overlay:
+        return overlay[rel]
+    path = root / rel
+    if path.is_symlink() or not path.is_file() or not contained(root, path):
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def _find_member_virtual(
+    root: Path,
+    folder_rel: str,
+    ulid: str,
+    overlay: dict[str, str | None],
+) -> tuple[str, str] | None:
+    """Same classification as ``find_member``, using overlay plus directory names only."""
+    if not ulid:
+        return None
+    for name, kind in _direct_entries(root, folder_rel, overlay):
+        if not name.startswith(ulid):
+            continue
+        if kind == "dir":
+            sub = _child_rel(folder_rel, name)
+            for subname, subkind in _direct_entries(root, sub, overlay):
+                if subkind == "file" and subname.startswith(ulid) and subname.endswith(".task-list.md"):
+                    return _child_rel(sub, subname), "list"
+        elif kind == "file" and name.endswith(".md") and not name.endswith(".task-list.md"):
+            return _child_rel(folder_rel, name), "task"
+    return None
 
 
 def render_list_folder_index(
@@ -149,65 +214,49 @@ def render_list_folder_index(
     """Return ``(index_markdown, error)`` for one list folder after ``overlay``.
 
     ``overlay`` maps store-relative paths to replacement text, or None to delete.
-    The markdown is exactly what ``render`` / ``find_member`` / ``frontmatter``
-    produce for that folder (same path the CLI uses). A temporary snapshot is
-    used so the walk sees post-overlay paths; nothing is written under ``root``.
-    ``error`` is set when the list file is missing or a member does not resolve.
+    The markdown matches ``render`` / ``find_member`` / ``frontmatter`` for that
+    folder. Lookup reads only the list page and member pointer pages (from the
+    overlay or the store); it does not copy the folder or load other files.
+    Nothing is written under ``root``. ``error`` is set when the list file is
+    missing or a member does not resolve.
     """
     root = root.resolve()
     list_rel = list_rel.replace("\\", "/").lstrip("/")
     folder_rel = str(Path(list_rel).parent).replace("\\", "/")
-    overlay = overlay or {}
-    tmp = tempfile.mkdtemp(prefix="atlas-tasks-idx-")
+    if folder_rel == ".":
+        folder_rel = ""
+    overlay = _overlay_norm(overlay)
+    folder = root / folder_rel if folder_rel else root
+    if folder_rel and folder.exists() and (folder.is_symlink() or not contained(root, folder)):
+        return "", f"{folder_rel}: symlink or path outside root"
+    text = _page_text(root, list_rel, overlay)
+    if text is None:
+        return "", f"{list_rel}: list file missing after overlay"
     try:
-        snap = Path(tmp).resolve()
-        src = root / folder_rel
-        if src.exists():
-            if src.is_symlink() or not contained(root, src):
-                return "", f"{folder_rel}: symlink or path outside root"
-            _copy_tree_nofollow(root, src, snap / folder_rel)
-        prefix = folder_rel.rstrip("/") + "/"
-        for rel, content in overlay.items():
-            rel = str(rel).replace("\\", "/")
-            if rel != list_rel and not rel.startswith(prefix):
-                continue
-            dest = snap / rel
-            if any(part.is_symlink() for part in dest.parents if part != snap and snap in part.parents):
-                return "", f"{rel}: symlink"
-            if content is None:
-                if dest.is_symlink():
-                    return "", f"{rel}: symlink"
-                if dest.is_file():
-                    dest.unlink()
-                continue
-            if dest.is_symlink():
-                return "", f"{rel}: symlink"
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content, encoding="utf-8")
-        list_file = snap / list_rel
-        if not list_file.is_file() or list_file.is_symlink():
-            return "", f"{list_rel}: list file missing after overlay"
+        meta, _body = frontmatter(text)
+        uris = members_of(meta, list_rel)
+    except FrontmatterError as e:
+        return "", str(e)
+    rows: list[tuple[str, str, str, str]] = []
+    for uri in uris:
+        u = ulid_of(uri)
+        hit = _find_member_virtual(root, folder_rel, u or "", overlay) if u else None
+        if hit is None:
+            return "", f"{list_rel}: member {uri} not resolved in {folder_rel}/"
+        path_rel, kind = hit
+        member_text = _page_text(root, path_rel, overlay)
+        if member_text is None:
+            return "", f"{list_rel}: member {uri} not resolved in {folder_rel}/"
         try:
-            meta, _body = frontmatter(list_file.read_text(encoding="utf-8"))
-            uris = members_of(meta, list_rel)
+            m2, _b = frontmatter(member_text)
         except FrontmatterError as e:
-            return "", str(e)
-        folder = list_file.parent
-        rows: list[tuple[str, str, str, str]] = []
-        for uri in uris:
-            u = ulid_of(uri)
-            hit = find_member(snap, folder, u) if u else None
-            if hit is None:
-                return "", f"{list_rel}: member {uri} not resolved in {folder_rel}/"
-            path, kind = hit
-            try:
-                m2, _b = frontmatter(path.read_text(encoding="utf-8"))
-            except FrontmatterError as e:
-                return "", f"{path.name}: {e}"
-            rows.append((u or "", kind, path.relative_to(folder).as_posix(), m2.get("title") or path.stem))
-        return render(list_file, meta, rows), None
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+            return "", f"{Path(path_rel).name}: {e}"
+        try:
+            rel_to_folder = Path(path_rel).relative_to(folder_rel).as_posix() if folder_rel else path_rel
+        except ValueError:
+            return "", f"{list_rel}: member {uri} not resolved in {folder_rel}/"
+        rows.append((u or "", kind, rel_to_folder, m2.get("title") or Path(path_rel).stem))
+    return render(Path(list_rel), meta, rows), None
 
 
 def main(argv: list[str] | None = None) -> int:
