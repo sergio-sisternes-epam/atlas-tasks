@@ -4,6 +4,22 @@ Load `references/paths/activation.md` first. Card `path: update`.
 
 Change an existing task or task list without the complete ritual. Completing → path **complete**. New task/list → path **add**.
 
+## Script (v0.8, preferred)
+
+Prefer the writer. Dry-run first when unsure, then read the JSON receipt and report from it. The script never runs git. The Steps below are the manual fallback when the script is unavailable or exits 3 (unsupported, for example nested list folder reparent).
+
+```bash
+python3 <skill>/scripts/tasks.py update --root <root> --id <REF> \
+  [--title <title>] [--status open|in_progress|done|cancelled] \
+  [--assignees <handle> ...|--clear-assignees] [--parent <URI>|--clear-parent] \
+  [--task-list <URI>|--clear-task-list] [--add-dependency <REF> ...] \
+  [--remove-dependency <REF> ...] [--body-path <path>] [--related-node <path>] [--dry-run]
+```
+
+`REF` is a full `atlas://` URI, a bare ULID, or a store-relative pointer path. Receipt fields: `ok`, `command`, `dry_run`, `atlas_id`, `task_id`, `ulid`, `title`, `kind`, `path`, `body_path`, `task_list`, `parent`, `derived_blocked`, `changes`, `index_refresh`, `warnings`.
+
+On an existing page, keys the command does not change are copied byte-identical (original quoting, comments, block or flow style, and folded scalars). Only changed or newly added keys are rewritten; new keys are appended in the documented order. Changed scalars use plain style when that is safe. Body text outside the edit stays byte-identical.
+
 ## Inputs
 
 - `atlas_id` / root (**required**)

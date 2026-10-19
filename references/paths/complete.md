@@ -2,6 +2,18 @@
 
 **Mark an existing task done.** Do not create a new task here — that is path **add**.
 
+## Script (v0.8, preferred)
+
+Prefer the writer. Dry-run first when unsure, then read the JSON receipt and report from it. The script never runs git. The Steps below are the manual fallback when the script is unavailable or exits 3.
+
+```bash
+python3 <skill>/scripts/tasks.py complete --root <root> --id <REF> [--dry-run]
+```
+
+`REF` is a full `atlas://` URI, a bare ULID, or a store-relative pointer path. Receipt fields: `ok`, `command`, `dry_run`, `atlas_id`, `task_id`, `ulid`, `title`, `kind`, `path`, `body_path`, `task_list`, `parent`, `derived_blocked`, `changes`, `index_refresh`, `warnings`.
+
+Completing rewrites only `task_status`. Every other frontmatter key stays byte-identical, and the body is not touched.
+
 ## Activation
 
 Load `references/paths/activation.md` first. Card `path: complete`.

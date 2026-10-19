@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic smokes for atlas-tasks (v0.7.0 — recall alias + task lists; contract-key-only overlay).
+# Deterministic smokes for atlas-tasks (v0.8.0 — writer script + recall alias + task lists; contract-key-only overlay).
 # Usage:
 #   smoke-check.sh <atlas-tasks-package-root>
 #   smoke-check.sh <atlas-tasks-package-root> --check <name>
@@ -14,6 +14,7 @@
 #               list-link-does-not-copy-tasks | rename-keeps-ulid-uri |
 #               member-lives-in-list-folder | membership-both-sides | filename-ulid-and-name |
 #               recall-alias | no-mandatory-notes-or-vault-tool | list-folder-index |
+#               tasks-writer |
 #               (default: all)
 set -euo pipefail
 PKG_ROOT="${1:-}"
@@ -65,7 +66,7 @@ if [[ -z "$CHECK_ONLY" ]]; then
   grep -q '"contribution_id": "atlas-tasks"' "$OVERLAY" || fail "bad contribution_id"
   [[ ! -d "$SKILL/contributions/atlas-todo" ]] || fail "legacy contributions/atlas-todo must be absent"
   grep -qE '^name: atlas-tasks$' "$SKILL/SKILL.md" || fail "SKILL name must be atlas-tasks"
-  grep -qE 'version: "0\.7\.0"' "$PKG_ROOT/apm.yml" || fail "apm.yml version must be 0.7.0"
+  grep -qE 'version: "0\.8\.0"' "$PKG_ROOT/apm.yml" || fail "apm.yml version must be 0.8.0"
   python3 - <<PY || fail "overlay extend-not-replace"
 import json,sys
 o=json.load(open("$OVERLAY"))
@@ -744,9 +745,9 @@ run_check() {
 # ---------------------------------------------------------------------------
 check_package_identity() {
   grep -qE '^name: atlas-tasks$' "$PKG_ROOT/apm.yml" || fail "apm.yml name"
-  grep -qE 'version: "0\.7\.0"' "$PKG_ROOT/apm.yml" || fail "apm.yml version"
+  grep -qE 'version: "0\.8\.0"' "$PKG_ROOT/apm.yml" || fail "apm.yml version"
   grep -qE '^name: atlas-tasks$' "$SKILL/SKILL.md" || fail "SKILL name"
-  grep -qE 'version: "0\.7\.0"' "$SKILL/SKILL.md" || fail "SKILL version"
+  grep -qE 'version: "0\.8\.0"' "$SKILL/SKILL.md" || fail "SKILL version"
   [[ -d "$SKILL/contributions/atlas-tasks" ]] || fail "missing contributions/atlas-tasks"
   [[ ! -d "$SKILL/contributions/atlas-todo" ]] || fail "legacy contributions/atlas-todo present"
   [[ -f "$SKILL/references/paths/migrate.md" ]] || fail "missing migrate path"
@@ -772,7 +773,7 @@ check_package_identity() {
   if grep -nE 'self-reference per skill|may omit or self-reference' "$README_CONTRIB" "$SKILL/references/paths/add.md" 2>/dev/null; then
     fail "docs still allow root task_list self-reference"
   fi
-  pass "package-identity: atlas-tasks 0.7.0"
+  pass "package-identity: atlas-tasks 0.8.0"
 }
 run_check package-identity check_package_identity
 
@@ -834,6 +835,20 @@ PY
   pass "list-folder-index: YAML-safe quoting, flow/unindented sequences, unresolved pointer and bad --list fail closed"
 }
 run_check list-folder-index check_list_folder_index
+
+check_tasks_writer() {
+  local tw="$SKILL/scripts/tasks.py"
+  [[ -f "$tw" && -x "$tw" ]] || fail "scripts/tasks.py missing or not executable"
+  grep -Fq '24. **Writer script (v0.8):**' "$SKILL/SKILL.md" || fail "SKILL pin 24 missing"
+  grep -Fq 'scripts/tasks.py' "$SKILL/references/paths/add.md" || fail "add.md must mention tasks.py"
+  grep -Fq 'scripts/tasks.py' "$SKILL/references/paths/update.md" || fail "update.md must mention tasks.py"
+  grep -Fq 'scripts/tasks.py' "$SKILL/references/paths/complete.md" || fail "complete.md must mention tasks.py"
+  if grep -q 'subprocess' "$tw"; then fail "tasks.py must not use subprocess"; fi
+  if grep -q 'os.system' "$tw"; then fail "tasks.py must not use os.system"; fi
+  if grep -q 'git ' "$tw"; then fail "tasks.py must not invoke git"; fi
+  pass "tasks-writer: script + pin 24 + path docs; no subprocess, os.system, or git"
+}
+run_check tasks-writer check_tasks_writer
 
 check_no_mandatory_notes_or_vault_tool() {
   python3 - "$SKILL" <<'PY' || fail "no-mandatory-notes-or-vault-tool"
@@ -1875,12 +1890,15 @@ run_install_fixture() {
 
   U_ROOT="01J8E3K6M3P1V7W4M5N8Q9S0XY"
   U_LIST="01J8E3KBR8V6Z2B9T0V3V4Y5D3"
+  U_HAND="01J8E3KCS9W7A3C0V1W4X5Z6E4"
   TID_ROOT="atlas://${AID}/tasks/${U_ROOT}"
   TID_LIST="atlas://${AID}/tasks/${U_LIST}"
+  TID_HAND="atlas://${AID}/tasks/${U_HAND}"
   N_DEMO="demo-task"
   N_PARENT="parent-a"
   N_CHILD="child-b"
   N_LIST="trip"
+  N_HAND="hand-task"
   mkdir -p "$FIX/tasks/${U_LIST}-${N_LIST}" "$FIX/knowledge/demo"
   cat > "$FIX/knowledge/demo/index.md" <<'MD'
 ---
@@ -1968,6 +1986,34 @@ relates_to:
 
 Child pointer with parent and kind:dependency edge for derived-blocked index column smoke.
 MD
+  cat > "$FIX/tasks/${U_HAND}-${N_HAND}.md" <<MD
+---
+type: task
+title: "Legacy task"
+created: "2026-10-01"
+task_id: ${TID_HAND}
+task_status: open
+body_path: knowledge/demo/todo-demo.md
+related_node: knowledge/demo/note.md
+assignees: [ada]
+parent: ~
+sub_tasks: []
+# hand-written: keep quoting, comments, and folded scalars
+status: open
+priority: medium
+origin: user
+sensitivity: internal
+description: >-
+  Manually written folded description
+  that must survive a status-only update.
+relates_to:
+  - path: knowledge/demo/note.md
+    kind: related
+---
+## Content
+
+Pointer only. Full prose lives in the colocated body page; this hand-written task page stays a short pointer.
+MD
   cat > "$FIX/tasks/${U_LIST}-${N_LIST}/${U_LIST}-${N_LIST}.task-list.md" <<MD
 ---
 type: task-list
@@ -1998,6 +2044,7 @@ tasks:
   - ${TID_LIST}
   - ${TID_DEMO}
   - ${TID_PARENT}
+  - ${TID_HAND}
 ---
 ## Members
 
@@ -2006,6 +2053,7 @@ Root task list: other lists and loose tasks only. Child-list members are not loo
 - Trip list — ${TID_LIST}
 - Demo task — ${TID_DEMO}
 - Parent A — ${TID_PARENT}
+- Legacy task — ${TID_HAND}
 
 | ulid | title | status | task_path | body_path | related_node | assignees | parent | dependency | blocked | task_list |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -2064,6 +2112,1264 @@ assert not bad, bad
 PY
   rm -f "$FIX.compile.json"
   pass "4c compile: no index_md_present on list folders ($label store)"
+
+  # v0.8 pin 24: tasks.py writer (dry-run, writes, fail-closed). Compile follows.
+  TW="$SKILL/scripts/tasks.py"
+  BODY="Colocated task body prose for the atlas-tasks writer smoke. This page holds the full task prose so compile accepts it."
+  RELATED="knowledge/demo/note.md"
+  hash_tree() {
+    python3 - "$1" <<'PY'
+import hashlib, os, sys
+root = sys.argv[1]
+h = hashlib.sha256()
+for base in ("tasks", "knowledge"):
+    top = os.path.join(root, base)
+    for dirpath, dirnames, filenames in os.walk(top):
+        dirnames.sort()
+        for name in sorted(filenames):
+            path = os.path.join(dirpath, name)
+            if os.path.islink(path):
+                continue
+            rel = os.path.relpath(path, root)
+            h.update(rel.encode())
+            h.update(b"\0")
+            with open(path, "rb") as fh:
+                h.update(fh.read())
+print(h.hexdigest())
+PY
+  }
+  assert_unchanged() {
+    local name="$1"
+    shift
+    local before after rc
+    before="$(hash_tree "$FIX")"
+    set +e
+    PYTHONDONTWRITEBYTECODE=1 python3 "$TW" "$@" >"$FIX.writer.out" 2>"$FIX.writer.err"
+    rc=$?
+    set -e
+    after="$(hash_tree "$FIX")"
+    [[ "$before" == "$after" ]] || fail "tasks.py $name changed the tree ($label)"
+    [[ "$rc" -ne 0 ]] || fail "tasks.py $name should fail ($label)"
+    printf '%s' "$rc"
+  }
+
+  before="$(hash_tree "$FIX")"
+  dry="$(PYTHONDONTWRITEBYTECODE=1 python3 "$TW" add --root "$FIX" --title "Dry task" \
+    --related-node "$RELATED" --body "$BODY" --dry-run)"
+  after="$(hash_tree "$FIX")"
+  [[ "$before" == "$after" ]] || fail "tasks.py dry-run wrote files ($label)"
+  printf '%s\n' "$dry" | python3 -c 'import json,sys; o=json.load(sys.stdin); assert o["ok"] is True and o["dry_run"] is True and o["command"]=="add"' \
+    || fail "tasks.py dry-run receipt ($label)"
+
+  loose="$(PYTHONDONTWRITEBYTECODE=1 python3 "$TW" add --root "$FIX" --title "Loose task" \
+    --related-node "$RELATED" --body "$BODY")"
+  read -r LOOSE_ID LOOSE_ULID LOOSE_PATH LOOSE_BODY < <(printf '%s\n' "$loose" | python3 -c 'import json,sys; o=json.load(sys.stdin); print(o["task_id"], o["ulid"], o["path"], o["body_path"])')
+  [[ -f "$FIX/$LOOSE_PATH" ]] || fail "loose task file missing ($label)"
+  [[ "$LOOSE_PATH" == "tasks/${LOOSE_ULID}-loose-task.md" ]] || fail "loose task path ($LOOSE_PATH)"
+  [[ -f "$FIX/$LOOSE_BODY" ]] || fail "loose task body page missing ($label)"
+  grep -Fq "$LOOSE_ID" "$FIX/tasks/index.md" || fail "root tasks missing loose task ($label)"
+  python3 - "$FIX/$LOOSE_PATH" "$LOOSE_ID" <<'PY' || fail "loose task frontmatter ($label)"
+import re, sys, yaml
+text = open(sys.argv[1], encoding="utf-8").read()
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+assert meta["type"] == "task" and meta["task_id"] == sys.argv[2]
+assert meta["task_status"] == "open" and "task_list" not in meta
+assert meta["title"] == "Loose task"
+PY
+
+  trip="$(PYTHONDONTWRITEBYTECODE=1 python3 "$TW" add --root "$FIX" --title "Trip child" \
+    --related-node "$RELATED" --body "$BODY" \
+    --task-list "$TID_LIST" --parent "$TID_PARENT" --depends-on "$TID_DEMO")"
+  read -r TRIP_ID TRIP_ULID TRIP_PATH < <(printf '%s\n' "$trip" | python3 -c 'import json,sys; o=json.load(sys.stdin); assert o["derived_blocked"] is True; assert o["task_list"]; assert o["parent"]; print(o["task_id"], o["ulid"], o["path"])')
+  [[ "$TRIP_PATH" == "tasks/${U_LIST}-${N_LIST}/${TRIP_ULID}-trip-child.md" ]] || fail "trip task path ($TRIP_PATH)"
+  [[ -f "$FIX/$TRIP_PATH" ]] || fail "trip task file missing ($label)"
+  python3 - "$FIX" "$TRIP_ID" "$TRIP_ULID" "$TID_LIST" "$TID_PARENT" "$TID_DEMO" "$U_LIST" "$N_LIST" <<'PY' || fail "trip task links ($label)"
+import re, sys, yaml
+from pathlib import Path
+fix, trip_id, trip_ulid, list_id, parent_id, demo_id, u_list, n_list = sys.argv[1:]
+def meta(path):
+    text = Path(path).read_text(encoding="utf-8")
+    return yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+task = meta(Path(fix) / f"tasks/{u_list}-{n_list}/{trip_ulid}-trip-child.md")
+assert task["task_list"] == list_id and task["parent"] == parent_id
+assert any(e.get("kind") == "dependency" and e.get("path") == demo_id for e in task["relates_to"])
+owner = meta(Path(fix) / f"tasks/{u_list}-{n_list}/{u_list}-{n_list}.task-list.md")
+assert trip_id in owner["tasks"]
+PY
+  python3 - "$FIX/tasks/${U_PARENT}-${N_PARENT}.md" "$FIX/tasks/${U_DEMO}-${N_DEMO}.md" \
+    "$FIX/tasks/${U_LIST}-${N_LIST}/index.md" "$TRIP_ID" "$TRIP_ULID" "$TID_DEMO" <<'PY' || fail "trip back-links ($label)"
+import re, sys, yaml
+from pathlib import Path
+parent_p, demo_p, idx_p, trip_id, trip_ulid, demo_id = sys.argv[1:]
+def meta(path):
+    text = Path(path).read_text(encoding="utf-8")
+    return yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+assert trip_id in meta(parent_p)["sub_tasks"]
+demo = meta(demo_p)
+assert any(e.get("kind") == "blocks" and e.get("path") == trip_id for e in demo["relates_to"])
+idx = Path(idx_p).read_text(encoding="utf-8")
+assert f"`{trip_ulid}`" in idx
+PY
+
+  lst="$(PYTHONDONTWRITEBYTECODE=1 python3 "$TW" add --root "$FIX" --kind task-list --title "Packing")"
+  read -r LIST_ID LIST_ULID LIST_PATH < <(printf '%s\n' "$lst" | python3 -c 'import json,sys; o=json.load(sys.stdin); assert o["kind"]=="task-list"; print(o["task_id"], o["ulid"], o["path"])')
+  [[ "$LIST_PATH" == "tasks/${LIST_ULID}-packing/${LIST_ULID}-packing.task-list.md" ]] || fail "new list path ($LIST_PATH)"
+  [[ -f "$FIX/$LIST_PATH" ]] || fail "new list file missing ($label)"
+  [[ -f "$FIX/tasks/${LIST_ULID}-packing/index.md" ]] || fail "new list index missing ($label)"
+  grep -Fq "$LIST_ID" "$FIX/tasks/index.md" || fail "root missing new list ($label)"
+  python3 - "$FIX/$LIST_PATH" "$TID_ROOT" <<'PY' || fail "new list frontmatter ($label)"
+import re, sys, yaml
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", open(sys.argv[1], encoding="utf-8").read(), re.S).group(1))
+assert meta["type"] == "task-list" and meta["task_list"] == sys.argv[2] and meta["tasks"] == []
+PY
+
+  ren="$(PYTHONDONTWRITEBYTECODE=1 python3 "$TW" update --root "$FIX" --id "$LOOSE_ID" --title "Loose renamed")"
+  read -r REN_ID REN_PATH < <(printf '%s\n' "$ren" | python3 -c 'import json,sys; o=json.load(sys.stdin); print(o["task_id"], o["path"])')
+  [[ "$REN_ID" == "$LOOSE_ID" ]] || fail "rename changed task_id ($label)"
+  [[ "$REN_PATH" == "tasks/${LOOSE_ULID}-loose-renamed.md" ]] || fail "renamed path ($REN_PATH)"
+  [[ ! -e "$FIX/$LOOSE_PATH" ]] || fail "old loose path still present ($label)"
+  [[ -f "$FIX/$REN_PATH" ]] || fail "renamed file missing ($label)"
+  grep -Fq "${LOOSE_ULID}-loose-renamed.md" "$FIX/tasks/index.md" || fail "root mention not rewritten ($label)"
+  grep -Fq "${LOOSE_ULID}-loose-task.md" "$FIX/tasks/index.md" && fail "old basename still in root ($label)" || true
+
+  mov="$(PYTHONDONTWRITEBYTECODE=1 python3 "$TW" update --root "$FIX" --id "$LOOSE_ID" --task-list "$TID_LIST")"
+  read -r MOV_PATH < <(printf '%s\n' "$mov" | python3 -c 'import json,sys; o=json.load(sys.stdin); print(o["path"])')
+  [[ "$MOV_PATH" == "tasks/${U_LIST}-${N_LIST}/${LOOSE_ULID}-loose-renamed.md" ]] || fail "moved path ($MOV_PATH)"
+  [[ -f "$FIX/$MOV_PATH" ]] || fail "moved file missing ($label)"
+  [[ ! -e "$FIX/$REN_PATH" ]] || fail "loose path remains after move ($label)"
+  python3 - "$FIX/tasks/index.md" "$FIX/tasks/${U_LIST}-${N_LIST}/${U_LIST}-${N_LIST}.task-list.md" \
+    "$FIX/tasks/${U_LIST}-${N_LIST}/index.md" "$LOOSE_ID" "$LOOSE_ULID" <<'PY' || fail "move membership ($label)"
+import re, sys, yaml
+from pathlib import Path
+root_p, list_p, idx_p, loose_id, loose_ulid = sys.argv[1:]
+def meta(path):
+    text = Path(path).read_text(encoding="utf-8")
+    return yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+assert loose_id not in meta(root_p)["tasks"]
+assert loose_id in meta(list_p)["tasks"]
+assert f"`{loose_ulid}`" in Path(idx_p).read_text(encoding="utf-8")
+PY
+
+  PYTHONDONTWRITEBYTECODE=1 python3 "$TW" update --root "$FIX" --id "$TRIP_ID" --remove-dependency "$TID_DEMO" >/dev/null
+  python3 - "$FIX/$TRIP_PATH" "$FIX/tasks/${U_DEMO}-${N_DEMO}.md" "$TRIP_ID" "$TID_DEMO" <<'PY' || fail "dependency not cleared both sides ($label)"
+import re, sys, yaml
+from pathlib import Path
+def meta(path):
+    text = Path(path).read_text(encoding="utf-8")
+    return yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+waiter, blocker, trip_id, demo_id = sys.argv[1:]
+assert not any(e.get("kind") == "dependency" and e.get("path") == demo_id for e in meta(waiter).get("relates_to") or [])
+assert not any(e.get("kind") == "blocks" and e.get("path") == trip_id for e in meta(blocker).get("relates_to") or [])
+PY
+
+  comp="$(PYTHONDONTWRITEBYTECODE=1 python3 "$TW" complete --root "$FIX" --id "$LOOSE_ID")"
+  printf '%s\n' "$comp" | python3 -c 'import json,sys; o=json.load(sys.stdin); assert o["ok"] is True and o["command"]=="complete"'
+  python3 - "$FIX/$MOV_PATH" "$LOOSE_ID" <<'PY' || fail "complete did not set done ($label)"
+import re, sys, yaml
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", open(sys.argv[1], encoding="utf-8").read(), re.S).group(1))
+assert meta["task_status"] == "done" and meta["task_id"] == sys.argv[2]
+assert meta["body_path"] and meta["related_node"] and "relates_to" in meta
+PY
+
+  python3 "$LFI" --root "$FIX" | grep -Fq "create=0, update=0" \
+    || fail "list-folder-index not idempotent after tasks.py ($label)"
+
+  assert_unchanged "root task-list" add --root "$FIX" --title "Nope" --related-node "$RELATED" --body "$BODY" --task-list "$TID_ROOT" >/dev/null
+  assert_unchanged "status blocked" add --root "$FIX" --title "Nope" --related-node "$RELATED" --body "$BODY" --status blocked >/dev/null
+  assert_unchanged "cross-atlas parent" add --root "$FIX" --title "Nope" --related-node "$RELATED" --body "$BODY" \
+    --parent "atlas://example.test/other/tasks/01J8E3KBR8V6Z2B9T0V3V4Y5D4" >/dev/null
+  assert_unchanged "dependency on task-list" add --root "$FIX" --title "Nope" --related-node "$RELATED" --body "$BODY" \
+    --depends-on "$TID_LIST" >/dev/null
+  assert_unchanged "parent cycle" update --root "$FIX" --id "$TID_PARENT" --parent "$TID_CHILD" >/dev/null
+  assert_unchanged "duplicate task-id" add --root "$FIX" --title "Nope" --related-node "$RELATED" --body "$BODY" \
+    --task-id "$TID_DEMO" >/dev/null
+  assert_unchanged "complete task-list" complete --root "$FIX" --id "$TID_LIST" >/dev/null
+  rc="$(assert_unchanged "nested list reparent" update --root "$FIX" --id "$TID_LIST" --clear-task-list)"
+  [[ "$rc" == "3" ]] || fail "nested list reparent must exit 3, got $rc ($label)"
+  grep -Fq "manual" "$FIX.writer.out" || fail "exit 3 must mention the manual update path ($label)"
+  rm -f "$FIX.writer.out" "$FIX.writer.err"
+
+  # Manually written task: unknown keys, a comment, flow style, and a folded scalar.
+  # A status-only update and complete must each touch exactly one task_status line.
+  HAND="$FIX/tasks/${U_HAND}-${N_HAND}.md"
+  [[ -f "$HAND" ]] || fail "hand-written task missing ($label)"
+  cp "$HAND" "$FIX.hand.pristine"
+  assert_one_status_line() {
+    local before="$1" after="$2" what="$3"
+    python3 - "$before" "$after" "$what" "$label" <<'PY' || fail "status diff ($label)"
+import difflib, sys
+before, after, what, label = sys.argv[1:]
+a = open(before, encoding="utf-8").read().splitlines(keepends=True)
+b = open(after, encoding="utf-8").read().splitlines(keepends=True)
+diff = list(difflib.unified_diff(a, b, fromfile="before", tofile="after"))
+removed = [ln for ln in diff if ln.startswith("-") and not ln.startswith("---")]
+added = [ln for ln in diff if ln.startswith("+") and not ln.startswith("+++")]
+if len(removed) != 1 or len(added) != 1 or "task_status" not in removed[0] or "task_status" not in added[0]:
+    sys.stderr.write("".join(diff) or "(empty diff)\n")
+    raise SystemExit(f"unified diff for {what} must touch exactly one task_status line ({label})")
+print(f"one-line {what} diff ok")
+PY
+  }
+  cmp -s "$FIX.hand.pristine" "$HAND" || fail "writer rewrote hand-written task before status update ($label)"
+  cp "$HAND" "$FIX.hand.before"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$TW" update --root "$FIX" --id "$TID_HAND" --status in_progress >/dev/null
+  assert_one_status_line "$FIX.hand.before" "$HAND" "update --status"
+  cp "$HAND" "$FIX.hand.before"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$TW" complete --root "$FIX" --id "$TID_HAND" >/dev/null
+  assert_one_status_line "$FIX.hand.before" "$HAND" "complete"
+  python3 - "$HAND" <<'PY' || fail "hand-written keys not preserved ($label)"
+import re, sys, yaml
+text = open(sys.argv[1], encoding="utf-8").read()
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+assert meta["task_status"] == "done"
+assert meta["origin"] == "user" and meta["priority"] == "medium"
+assert meta["sensitivity"] == "internal" and meta["status"] == "open"
+assert "folded description" in meta["description"]
+assert any(e.get("kind") == "related" and e.get("path") == "knowledge/demo/note.md" for e in meta["relates_to"])
+assert 'title: "Legacy task"' in text and "parent: ~" in text and "assignees: [ada]" in text
+assert "# hand-written:" in text and "description: >-" in text
+PY
+  SPECIAL='Quote "here" \ backslash: colon'
+  spec="$(PYTHONDONTWRITEBYTECODE=1 python3 "$TW" update --root "$FIX" --id "$TID_HAND" --title "$SPECIAL")"
+  printf '%s\n' "$spec" | python3 -c 'import json,sys; o=json.load(sys.stdin); assert o["ok"] is True and o["title"]==sys.argv[1]' "$SPECIAL" \
+    || fail "special title receipt ($label)"
+  python3 - "$FIX" "$TID_HAND" "$SPECIAL" <<'PY' || fail "special title did not round-trip ($label)"
+import re, sys, yaml
+from pathlib import Path
+fix, tid, title = sys.argv[1:]
+hits = list(Path(fix, "tasks").rglob("*.md"))
+found = None
+for path in hits:
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        continue
+    m = re.match(r"^---\n(.*?)\n---", text, re.S)
+    if not m:
+        continue
+    meta = yaml.safe_load(m.group(1))
+    if isinstance(meta, dict) and meta.get("task_id") == tid:
+        found = meta
+        break
+assert found is not None, "renamed hand task not found"
+assert found["title"] == title, found["title"]
+PY
+  rm -f "$FIX.hand.pristine" "$FIX.hand.before"
+  # Review regressions (comment ids). Each one must fail closed or preserve bytes as noted.
+  tw_run() {
+    TW_NAME="$1"
+    shift
+    set +e
+    PYTHONDONTWRITEBYTECODE=1 python3 "$TW" "$@" >"$FIX.tw.out" 2>"$FIX.tw.err"
+    TW_RC=$?
+    set -e
+    if grep -q 'Traceback' "$FIX.tw.err"; then
+      fail "tasks.py $TW_NAME printed a traceback ($label): $(cat "$FIX.tw.err")"
+    fi
+  }
+  tw_ok() {
+    tw_run "$@"
+    if [[ "$TW_RC" -ne 0 ]]; then
+      fail "tasks.py $TW_NAME failed rc=$TW_RC ($label): $(cat "$FIX.tw.out" "$FIX.tw.err")"
+    fi
+  }
+
+  # 4312597554 / 4312597833: a case-only rename must not relocate the folder onto itself.
+  TRIP_DIR="$FIX/tasks/${U_LIST}-trip"
+  python3 - "$TRIP_DIR/photo.bin" <<'PY'
+import sys
+open(sys.argv[1], "wb").write(b"\xff\xfe\x00\x01not-utf8")
+PY
+  printf 'keep-notes\n' > "$TRIP_DIR/notes.txt"
+  LIST_PAGE="$TRIP_DIR/${U_LIST}-trip.task-list.md"
+  [[ -f "$LIST_PAGE" && -f "$TRIP_DIR/index.md" ]] || fail "trip list folder incomplete before case rename ($label)"
+  tw_ok "4312597554 case rename" update --root "$FIX" --id "$TID_LIST" --title "TRIP"
+  python3 - "$FIX.tw.out" <<'PY' || fail "4312597554 case rename receipt ($label)"
+import json, sys
+o = json.load(open(sys.argv[1]))
+assert o["ok"] is True and o["title"] == "TRIP", o
+assert o["path"].endswith("-trip.task-list.md") and "-trip-new" not in o["path"], o["path"]
+PY
+  [[ -f "$LIST_PAGE" ]] || fail "4312597554 case rename removed the list page ($label)"
+  [[ -f "$TRIP_DIR/index.md" ]] || fail "4312597554 case rename deleted the list index ($label)"
+  grep -Fq "generated_by: atlas-tasks" "$TRIP_DIR/index.md" || fail "4312597554 case rename lost the generated index ($label)"
+  [[ "$(cat "$TRIP_DIR/notes.txt")" == "keep-notes" ]] || fail "4312597554 case rename lost notes ($label)"
+  python3 - "$TRIP_DIR/photo.bin" <<'PY' || fail "4312597554 case rename lost attachment bytes ($label)"
+import sys
+assert open(sys.argv[1], "rb").read() == b"\xff\xfe\x00\x01not-utf8"
+PY
+  tw_ok "4312597554 resubmit title" update --root "$FIX" --id "$TID_LIST" --title "TRIP"
+  [[ -f "$LIST_PAGE" && -f "$TRIP_DIR/index.md" && -f "$TRIP_DIR/notes.txt" && -f "$TRIP_DIR/photo.bin" ]] \
+    || fail "4312597554 resubmit relocated the list folder onto itself ($label)"
+
+  # Same folder, non-canonical list-page basename: rename the page only.
+  ALIAS="$TRIP_DIR/${U_LIST}-alias.task-list.md"
+  mv "$LIST_PAGE" "$ALIAS"
+  tw_ok "4312597554 basename rename" update --root "$FIX" --id "$TID_LIST" --title "TRIP"
+  [[ -f "$LIST_PAGE" ]] || fail "4312597554 basename-only rename did not restore the list page ($label)"
+  [[ ! -e "$ALIAS" ]] || fail "4312597554 alias list page still present ($label)"
+  [[ -d "$TRIP_DIR" && -f "$TRIP_DIR/index.md" && -f "$TRIP_DIR/notes.txt" ]] \
+    || fail "4312597554 basename-only rename moved or deleted the folder ($label)"
+  python3 - "$TRIP_DIR/photo.bin" <<'PY' || fail "4312597554 basename rename lost attachment ($label)"
+import sys
+assert open(sys.argv[1], "rb").read() == b"\xff\xfe\x00\x01not-utf8"
+PY
+
+  # 4312597605: reject an occupied destination folder before planning the move.
+  tw_ok "4312597605 add dest list" add --root "$FIX" --kind task-list --title "Dest A"
+  read -r DEST_ID DEST_ULID < <(python3 -c 'import json,sys; o=json.load(sys.stdin); print(o["task_id"], o["ulid"])' <"$FIX.tw.out")
+  mkdir -p "$FIX/tasks/${DEST_ULID}-dest-b"
+  printf 'secret\n' > "$FIX/tasks/${DEST_ULID}-dest-b/keep.txt"
+  rc="$(assert_unchanged "4312597605 occupied list dest" update --root "$FIX" --id "$DEST_ID" --title "Dest B")"
+  [[ "$rc" == "1" ]] || fail "4312597605 occupied list dest must exit 1, got $rc ($label)"
+  grep -Fq "target path already exists" "$FIX.writer.out" || fail "4312597605 occupied dest error ($label): $(cat "$FIX.writer.out")"
+  python3 - "$FIX.writer.out" <<'PY' || fail "4312597605 occupied dest receipt ($label)"
+import json, sys
+o = json.load(open(sys.argv[1]))
+assert o["ok"] is False and "target path already exists" in o["error"], o
+PY
+  grep -q 'Traceback' "$FIX.writer.err" && fail "4312597605 occupied dest printed a traceback ($label)" || true
+  [[ "$(cat "$FIX/tasks/${DEST_ULID}-dest-b/keep.txt")" == "secret" ]] || fail "4312597605 occupied dest clobbered keep.txt ($label)"
+  rm -rf "$FIX/tasks/${DEST_ULID}-dest-b"
+
+  # 4312597792 / 4312597833: one-pass longest rewrite; non-page files move as raw bytes.
+  tw_ok "4312597792 prefix rename" update --root "$FIX" --id "$TID_LIST" --title "Trip new"
+  python3 - "$FIX" "$U_LIST" <<'PY' || fail "4312597792 prefix rename broke links or attachments ($label)"
+import sys
+from pathlib import Path
+fix, ulid = sys.argv[1:]
+root = Path(fix)
+old = root / "tasks" / f"{ulid}-trip"
+new = root / "tasks" / f"{ulid}-trip-new"
+assert not old.exists(), "old folder remains"
+assert new.is_dir(), "new folder missing"
+assert (new / "photo.bin").read_bytes() == b"\xff\xfe\x00\x01not-utf8"
+assert (new / "notes.txt").read_text(encoding="utf-8") == "keep-notes\n"
+assert (new / "index.md").is_file()
+assert (new / f"{ulid}-trip-new.task-list.md").is_file()
+blob = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in (root / "tasks").rglob("*.md"))
+assert "trip-new-new" not in blob, "folder token rewritten twice"
+assert "UnicodeDecodeError" not in blob
+PY
+
+  # 4312597692 / 4312597980: stabilize path edges on move; derived_blocked resolves them first.
+  tw_ok "4312597692 add path blocker" add --root "$FIX" --title "Path blocker" --related-node "$RELATED" --body "$BODY"
+  read -r BLOCK_ID BLOCK_ULID BLOCK_PATH < <(python3 -c 'import json,sys; o=json.load(sys.stdin); print(o["task_id"], o["ulid"], o["path"])' <"$FIX.tw.out")
+  tw_ok "4312597692 add path waiter" add --root "$FIX" --title "Path waiter" --related-node "$RELATED" --body "$BODY" --depends-on "$BLOCK_ID"
+  read -r WAIT_ID WAIT_ULID WAIT_PATH < <(python3 -c 'import json,sys; o=json.load(sys.stdin); assert o["derived_blocked"] is True; print(o["task_id"], o["ulid"], o["path"])' <"$FIX.tw.out")
+  python3 - "$FIX" "$WAIT_PATH" "$BLOCK_PATH" "$WAIT_ID" "$BLOCK_ID" <<'PY' || fail "4312597692 could not rewrite edges to paths ($label)"
+import re, sys
+from pathlib import Path
+fix, wait_rel, block_rel, wait_id, block_id = sys.argv[1:]
+root = Path(fix)
+def retarget(rel, old, new):
+    path = root / rel
+    text = path.read_text(encoding="utf-8")
+    pat = re.compile(r'(path:\s*)(?:"' + re.escape(old) + r'"|' + re.escape(old) + r')')
+    updated, n = pat.subn(lambda m: m.group(1) + new, text, count=1)
+    if n != 1:
+        raise SystemExit(f"path edge not rewritten in {rel}")
+    path.write_text(updated, encoding="utf-8")
+retarget(wait_rel, block_id, block_rel)
+retarget(block_rel, wait_id, wait_rel)
+PY
+  tw_ok "4312597980 open path" update --root "$FIX" --id "$WAIT_ID" --status in_progress
+  python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); assert o["derived_blocked"] is True, o' "$FIX.tw.out" \
+    || fail "4312597980 open path dependency must be derived_blocked ($label)"
+  tw_ok "4312597980 blocker done" update --root "$FIX" --id "$BLOCK_ID" --status done
+  tw_ok "4312597980 done path" update --root "$FIX" --id "$WAIT_ID" --status open
+  python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); assert o["derived_blocked"] is False, o' "$FIX.tw.out" \
+    || fail "4312597980 done path dependency must not be derived_blocked ($label)"
+  tw_ok "4312597980 blocker cancelled" update --root "$FIX" --id "$BLOCK_ID" --status cancelled
+  tw_ok "4312597980 cancelled path" update --root "$FIX" --id "$WAIT_ID" --status in_progress
+  python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); assert o["derived_blocked"] is False, o' "$FIX.tw.out" \
+    || fail "4312597980 cancelled path dependency must not be derived_blocked ($label)"
+  tw_ok "4312597980 remote" add --root "$FIX" --title "Remote waiter" --related-node "$RELATED" --body "$BODY" \
+    --depends-on "atlas://cross.example/tasks/01J8E3KBR8V6Z2B9T0V3V4Y5D4"
+  python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); assert o["ok"] is True and o["derived_blocked"] is True, o' "$FIX.tw.out" \
+    || fail "4312597980 unresolved remote must be derived_blocked ($label)"
+  tw_ok "4312597692 move blocker" update --root "$FIX" --id "$BLOCK_ID" --title "Path blocker moved"
+  python3 - "$FIX" "$WAIT_PATH" "$BLOCK_ID" "$BLOCK_PATH" <<'PY' || fail "4312597692 path dependency not stabilized ($label)"
+import re, sys, yaml
+from pathlib import Path
+fix, wait_rel, block_id, old_block = sys.argv[1:]
+text = Path(fix, wait_rel).read_text(encoding="utf-8")
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+deps = [e.get("path") for e in meta.get("relates_to") or [] if isinstance(e, dict) and e.get("kind") == "dependency"]
+assert block_id in deps, deps
+assert old_block not in deps, deps
+assert old_block not in text
+PY
+  tw_ok "4312597692 move waiter" update --root "$FIX" --id "$WAIT_ID" --title "Path waiter moved"
+  python3 - "$FIX" "$WAIT_ID" "$WAIT_PATH" <<'PY' || fail "4312597692 path blocks edge not stabilized ($label)"
+import re, sys, yaml
+from pathlib import Path
+fix, wait_id, old_wait = sys.argv[1:]
+found = None
+for path in Path(fix, "tasks").rglob("*.md"):
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        continue
+    m = re.match(r"^---\n(.*?)\n---", text, re.S)
+    if not m:
+        continue
+    meta = yaml.safe_load(m.group(1))
+    if not isinstance(meta, dict):
+        continue
+    edges = meta.get("relates_to") or []
+    if any(isinstance(e, dict) and e.get("kind") == "blocks" and e.get("path") == wait_id for e in edges):
+        found = text
+        break
+assert found is not None, "blocks edge was not converted to a task URI"
+assert old_wait not in found
+PY
+
+  # 4312597735: preserve CRLF. A status update and complete each change one line.
+  tw_ok "4312597735 add crlf task" add --root "$FIX" --title "Crlf task" --related-node "$RELATED" --body "$BODY"
+  read -r CRLF_ID CRLF_PATH < <(python3 -c 'import json,sys; o=json.load(sys.stdin); print(o["task_id"], o["path"])' <"$FIX.tw.out")
+  python3 - "$FIX/$CRLF_PATH" <<'PY' || fail "4312597735 could not convert task to CRLF ($label)"
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+raw = path.read_bytes()
+if b"\r\n" in raw:
+    raise SystemExit("task already uses CRLF")
+path.write_bytes(raw.replace(b"\n", b"\r\n"))
+PY
+  cp "$FIX/$CRLF_PATH" "$FIX.crlf.before"
+  tw_ok "4312597735 crlf status" update --root "$FIX" --id "$CRLF_ID" --status in_progress
+  python3 - "$FIX.crlf.before" "$FIX/$CRLF_PATH" update <<'PY' || fail "4312597735 CRLF status diff ($label)"
+import sys
+before, after, what = sys.argv[1:]
+a = open(before, "rb").read()
+b = open(after, "rb").read()
+if b"\n" in b.replace(b"\r\n", b""):
+    raise SystemExit(f"{what} introduced a bare LF")
+a_lines, b_lines = a.split(b"\r\n"), b.split(b"\r\n")
+if len(a_lines) != len(b_lines):
+    raise SystemExit(f"{what} changed line count {len(a_lines)} -> {len(b_lines)}")
+changed = [i for i, (x, y) in enumerate(zip(a_lines, b_lines)) if x != y]
+if len(changed) != 1 or b"task_status" not in a_lines[changed[0]]:
+    raise SystemExit(f"{what} diff lines {changed}")
+PY
+  cp "$FIX/$CRLF_PATH" "$FIX.crlf.before"
+  tw_ok "4312597735 crlf complete" complete --root "$FIX" --id "$CRLF_ID"
+  python3 - "$FIX.crlf.before" "$FIX/$CRLF_PATH" complete <<'PY' || fail "4312597735 CRLF complete diff ($label)"
+import sys
+before, after, what = sys.argv[1:]
+a = open(before, "rb").read()
+b = open(after, "rb").read()
+if b"\n" in b.replace(b"\r\n", b""):
+    raise SystemExit(f"{what} introduced a bare LF")
+a_lines, b_lines = a.split(b"\r\n"), b.split(b"\r\n")
+if len(a_lines) != len(b_lines):
+    raise SystemExit(f"{what} changed line count {len(a_lines)} -> {len(b_lines)}")
+changed = [i for i, (x, y) in enumerate(zip(a_lines, b_lines)) if x != y]
+if len(changed) != 1 or b"task_status" not in a_lines[changed[0]] or b"done" not in b_lines[changed[0]]:
+    raise SystemExit(f"{what} diff lines {changed}")
+PY
+  python3 - "$FIX/$CRLF_PATH" <<'PY'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
+PY
+  rm -f "$FIX.crlf.before"
+
+  # 4312597884: existing tasks require only mandatory fields. Do not add optional keys.
+  MIN_ULID="01J8E3KDT0X8B4D1W2X5Y6Z7F5"
+  MIN_ID="atlas://${AID}/tasks/${MIN_ULID}"
+  python3 - "$FIX" "$MIN_ID" "$MIN_ULID" <<'PY' || fail "4312597884 could not install minimal task ($label)"
+import re, sys
+from pathlib import Path
+fix, uri, ulid = sys.argv[1:]
+root = Path(fix)
+idx = root / "tasks" / "index.md"
+text = idx.read_text(encoding="utf-8")
+m = re.match(r"^---\n(.*?)\n---", text, re.S)
+if not m or not re.search(r"^tasks:\n", m.group(1), re.M):
+    raise SystemExit("root tasks block missing")
+inner = re.sub(r"^tasks:\n", "tasks:\n  - %s\n" % uri, m.group(1), count=1, flags=re.M)
+idx.write_text("---\n" + inner + "\n---" + text[m.end():], encoding="utf-8")
+(root / "tasks" / f"{ulid}-minimal.md").write_text(
+    "---\n"
+    "type: task\n"
+    "title: Minimal\n"
+    'created: "2026-10-01"\n'
+    f"task_id: {uri}\n"
+    "task_status: open\n"
+    "body_path: knowledge/demo/todo-demo.md\n"
+    "---\n"
+    "Pointer only. Full prose lives in the colocated body page; this page stays a short pointer.\n",
+    encoding="utf-8",
+)
+PY
+  tw_ok "4312597884 minimal status" update --root "$FIX" --id "$MIN_ID" --status in_progress
+  python3 - "$FIX/tasks/${MIN_ULID}-minimal.md" in_progress <<'PY' || fail "4312597884 status added optional keys ($label)"
+import re, sys, yaml
+text = open(sys.argv[1], encoding="utf-8").read()
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+for key in ("assignees", "parent", "sub_tasks", "relates_to", "related_node", "task_list"):
+    if key in meta:
+        raise SystemExit(f"added {key}")
+assert meta["task_status"] == sys.argv[2], meta["task_status"]
+PY
+  tw_ok "4312597884 minimal complete" complete --root "$FIX" --id "$MIN_ID"
+  python3 - "$FIX/tasks/${MIN_ULID}-minimal.md" done <<'PY' || fail "4312597884 complete added optional keys ($label)"
+import re, sys, yaml
+text = open(sys.argv[1], encoding="utf-8").read()
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+for key in ("assignees", "parent", "sub_tasks", "relates_to", "related_node", "task_list"):
+    if key in meta:
+        raise SystemExit(f"added {key}")
+assert meta["task_status"] == sys.argv[2], meta["task_status"]
+PY
+
+  # 4312597934: when related_node is present, body_path must sit beside it after the write.
+  mkdir -p "$FIX/knowledge/side"
+  cat > "$FIX/knowledge/side/index.md" <<'MD'
+---
+type: document
+title: Side knowledge folder
+created: "2026-10-01"
+---
+Index for the side knowledge folder used by colocation checks in the writer smoke.
+MD
+  cat > "$FIX/knowledge/side/note.md" <<'MD'
+---
+type: document
+title: Side note
+created: "2026-10-01"
+---
+Related knowledge node in a different folder from the demo note, for colocation checks.
+MD
+  cat > "$FIX/knowledge/side/body.md" <<'MD'
+---
+type: document
+title: Side body
+created: "2026-10-01"
+---
+Colocated body prose in the side folder. Compile accepts this page beside the side note.
+MD
+  before="$(hash_tree "$FIX")"
+  tw_run "4312597934 mismatched add" add --root "$FIX" --title "Bad colo" \
+    --related-node "$RELATED" --body-path "knowledge/side/body.md"
+  after="$(hash_tree "$FIX")"
+  [[ "$TW_RC" -ne 0 && "$before" == "$after" ]] || fail "4312597934 mismatched add wrote or succeeded ($label)"
+  grep -Fq "beside" "$FIX.tw.out" || fail "4312597934 mismatched add error ($label): $(cat "$FIX.tw.out")"
+  before="$(hash_tree "$FIX")"
+  tw_run "4312597934 directory mismatch" add --root "$FIX" --title "Bad dir colo" \
+    --related-node "knowledge/side" --body-path "knowledge/demo/todo-demo.md"
+  after="$(hash_tree "$FIX")"
+  [[ "$TW_RC" -ne 0 && "$before" == "$after" ]] || fail "4312597934 directory mismatch wrote or succeeded ($label)"
+  grep -Fq "beside" "$FIX.tw.out" || fail "4312597934 directory mismatch error ($label): $(cat "$FIX.tw.out")"
+  tw_ok "4312597934 directory match" add --root "$FIX" --title "Dir colo" \
+    --related-node "knowledge/side" --body-path "knowledge/side/body.md"
+  tw_ok "4312597934 add colo task" add --root "$FIX" --title "Colo task" --related-node "$RELATED" --body "$BODY"
+  read -r COLO_ID COLO_PATH < <(python3 -c 'import json,sys; o=json.load(sys.stdin); print(o["task_id"], o["path"])' <"$FIX.tw.out")
+  rc="$(assert_unchanged "4312597934 body elsewhere" update --root "$FIX" --id "$COLO_ID" --body-path "knowledge/side/body.md")"
+  [[ "$rc" == "1" ]] || fail "4312597934 body update must exit 1, got $rc ($label)"
+  grep -Fq "beside" "$FIX.writer.out" || fail "4312597934 body update error ($label): $(cat "$FIX.writer.out")"
+  rc="$(assert_unchanged "4312597934 node elsewhere" update --root "$FIX" --id "$COLO_ID" --related-node "knowledge/side/note.md")"
+  [[ "$rc" == "1" ]] || fail "4312597934 related_node update must exit 1, got $rc ($label)"
+  grep -Fq "beside" "$FIX.writer.out" || fail "4312597934 related_node update error ($label): $(cat "$FIX.writer.out")"
+  tw_ok "4312597934 same directory" update --root "$FIX" --id "$COLO_ID" \
+    --related-node "knowledge/side/note.md" --body-path "knowledge/side/body.md"
+  python3 - "$FIX/$COLO_PATH" <<'PY' || fail "4312597934 same-directory update did not stick ($label)"
+import re, sys, yaml
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", open(sys.argv[1], encoding="utf-8").read(), re.S).group(1))
+assert meta["related_node"] == "knowledge/side/note.md", meta.get("related_node")
+assert meta["body_path"] == "knowledge/side/body.md", meta.get("body_path")
+PY
+
+  # 4312597647: exclusive lock around the whole transaction; dry-run may share the lock.
+  hold_tasks_lock() {
+    LOCK_MODE="$1"
+    READY="$FIX.lock.ready"
+    RELEASE="$FIX.lock.release"
+    rm -f "$READY" "$RELEASE"
+    python3 - "$FIX/tasks" "$READY" "$RELEASE" "$LOCK_MODE" >"$FIX.lock.holder.out" 2>"$FIX.lock.holder.err" <<'PY' &
+import fcntl, os, sys, time
+tasks, ready, release, mode = sys.argv[1:]
+flags = os.O_RDONLY | os.O_DIRECTORY
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+fd = os.open(tasks, flags)
+fcntl.flock(fd, fcntl.LOCK_EX if mode == "ex" else fcntl.LOCK_SH)
+with open(ready, "w", encoding="utf-8") as fh:
+    fh.write("locked\n")
+    fh.flush()
+deadline = time.time() + 25
+while not os.path.exists(release) and time.time() < deadline:
+    time.sleep(0.05)
+fcntl.flock(fd, fcntl.LOCK_UN)
+os.close(fd)
+PY
+    holder=$!
+    ready=0
+    for _ in $(seq 1 100); do
+      if [[ -f "$READY" ]]; then ready=1; break; fi
+      sleep 0.05
+    done
+    if [[ "$ready" != 1 ]]; then
+      kill "$holder" 2>/dev/null || true
+      wait "$holder" 2>/dev/null || true
+      fail "4312597647 lock holder ($LOCK_MODE) did not start ($label): $(cat "$FIX.lock.holder.err" 2>/dev/null || true)"
+    fi
+  }
+  release_tasks_lock() {
+    echo go > "$RELEASE"
+    set +e
+    wait "$holder"
+    set -e
+  }
+  hold_tasks_lock sh
+  before="$(hash_tree "$FIX")"
+  set +e
+  timeout 10 env PYTHONDONTWRITEBYTECODE=1 python3 "$TW" add --root "$FIX" --title "Shared dry" \
+    --related-node "$RELATED" --body "$BODY" --dry-run >"$FIX.shared.out" 2>"$FIX.shared.err"
+  shared_rc=$?
+  set -e
+  after="$(hash_tree "$FIX")"
+  if [[ "$shared_rc" -ne 0 || "$before" != "$after" ]]; then
+    release_tasks_lock
+    fail "4312597647 dry-run did not finish under a shared lock rc=$shared_rc ($label): $(cat "$FIX.shared.out" "$FIX.shared.err")"
+  fi
+  python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); assert o["ok"] is True and o["dry_run"] is True' "$FIX.shared.out" \
+    || { release_tasks_lock; fail "4312597647 shared dry-run receipt ($label)"; }
+  set +e
+  PYTHONDONTWRITEBYTECODE=1 python3 "$TW" add --root "$FIX" --title "Locked add" \
+    --related-node "$RELATED" --body "$BODY" >"$FIX.lock.add.out" 2>"$FIX.lock.add.err" &
+  add_pid=$!
+  set -e
+  sleep 1.5
+  if ! kill -0 "$add_pid" 2>/dev/null; then
+    release_tasks_lock
+    fail "4312597647 add finished while a shared lock was held ($label): $(cat "$FIX.lock.add.out" "$FIX.lock.add.err")"
+  fi
+  echo go > "$RELEASE"
+  waited=0
+  for _ in $(seq 1 150); do
+    if ! kill -0 "$add_pid" 2>/dev/null; then waited=1; break; fi
+    sleep 0.1
+  done
+  if [[ "$waited" != 1 ]]; then
+    kill "$add_pid" 2>/dev/null || true
+    wait "$add_pid" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    fail "4312597647 add stayed blocked after the shared lock was released ($label)"
+  fi
+  set +e
+  wait "$add_pid"
+  add_rc=$?
+  wait "$holder"
+  set -e
+  [[ "$add_rc" -eq 0 ]] || fail "4312597647 add failed after shared unlock ($label): $(cat "$FIX.lock.add.out" "$FIX.lock.add.err")"
+  hold_tasks_lock ex
+  set +e
+  PYTHONDONTWRITEBYTECODE=1 python3 "$TW" add --root "$FIX" --title "Exclusive add" \
+    --related-node "$RELATED" --body "$BODY" >"$FIX.lock.add.out" 2>"$FIX.lock.add.err" &
+  add_pid=$!
+  set -e
+  sleep 1.5
+  if ! kill -0 "$add_pid" 2>/dev/null; then
+    release_tasks_lock
+    fail "4312597647 add finished while an exclusive lock was held ($label): $(cat "$FIX.lock.add.out" "$FIX.lock.add.err")"
+  fi
+  echo go > "$RELEASE"
+  waited=0
+  for _ in $(seq 1 150); do
+    if ! kill -0 "$add_pid" 2>/dev/null; then waited=1; break; fi
+    sleep 0.1
+  done
+  if [[ "$waited" != 1 ]]; then
+    kill "$add_pid" 2>/dev/null || true
+    wait "$add_pid" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    fail "4312597647 add stayed blocked after the exclusive lock was released ($label)"
+  fi
+  set +e
+  wait "$add_pid"
+  add_rc=$?
+  wait "$holder"
+  set -e
+  [[ "$add_rc" -eq 0 ]] || fail "4312597647 add failed after exclusive unlock ($label): $(cat "$FIX.lock.add.out" "$FIX.lock.add.err")"
+  python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); assert o["ok"] is True and o["title"]=="Exclusive add"' "$FIX.lock.add.out" \
+    || fail "4312597647 exclusive add receipt ($label)"
+
+  set +e
+  PYTHONDONTWRITEBYTECODE=1 python3 "$TW" add --root "$FIX" --title "Race one" \
+    --related-node "$RELATED" --body "$BODY" >"$FIX.race1.out" 2>"$FIX.race1.err" &
+  race1=$!
+  PYTHONDONTWRITEBYTECODE=1 python3 "$TW" add --root "$FIX" --title "Race two" \
+    --related-node "$RELATED" --body "$BODY" >"$FIX.race2.out" 2>"$FIX.race2.err" &
+  race2=$!
+  set -e
+  waited=0
+  for _ in $(seq 1 200); do
+    if ! kill -0 "$race1" 2>/dev/null && ! kill -0 "$race2" 2>/dev/null; then waited=1; break; fi
+    sleep 0.1
+  done
+  if [[ "$waited" != 1 ]]; then
+    kill "$race1" 2>/dev/null || true
+    kill "$race2" 2>/dev/null || true
+    wait "$race1" 2>/dev/null || true
+    wait "$race2" 2>/dev/null || true
+    fail "4312597647 parallel adds did not finish ($label)"
+  fi
+  set +e
+  wait "$race1"
+  race1_rc=$?
+  wait "$race2"
+  race2_rc=$?
+  set -e
+  [[ "$race1_rc" -eq 0 && "$race2_rc" -eq 0 ]] \
+    || fail "4312597647 parallel adds rc=$race1_rc/$race2_rc ($label): $(cat "$FIX.race1.out" "$FIX.race1.err" "$FIX.race2.out" "$FIX.race2.err")"
+  python3 - "$FIX" "$FIX.race1.out" "$FIX.race2.out" <<'PY' || fail "4312597647 parallel add lost a task ($label)"
+import json, re, sys, yaml
+from pathlib import Path
+fix, a, b = sys.argv[1:]
+ids = [json.load(open(a))["task_id"], json.load(open(b))["task_id"]]
+text = Path(fix, "tasks/index.md").read_text(encoding="utf-8")
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+for tid in ids:
+    assert tid in meta["tasks"], tid
+PY
+
+  # Stale snapshot, temp cleanup, and unexpected errors stay inside the fixture root.
+  python3 - "$TW" "$FIX" <<'PY' || fail "4312597647/4312598014 writer internals ($label)"
+import importlib.util, io, json, os, sys
+from pathlib import Path
+tw, fix = sys.argv[1:]
+root = Path(fix)
+spec = importlib.util.spec_from_file_location("tasks_writer_regress", tw)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+store = mod.load_store(root)
+idx = root / "tasks" / "index.md"
+original = idx.read_bytes()
+try:
+    idx.write_bytes(original + b"\n")
+    st = idx.stat()
+    os.utime(idx, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+    try:
+        mod.assert_store_unchanged(store, [])
+    except mod.Fail as exc:
+        if "store changed during write" not in exc.message:
+            raise SystemExit(f"unexpected stale error: {exc.message}")
+    else:
+        raise SystemExit("stale store was accepted")
+finally:
+    idx.write_bytes(original)
+
+def temps():
+    return list(root.rglob(".tasks-*.tmp"))
+
+real_write = os.write
+def boom_write(fd, data):
+    raise OSError("disk")
+os.write = boom_write
+try:
+    try:
+        mod.atomic_write(root, "tasks/probe-write.md", b"hi")
+    except OSError:
+        pass
+    else:
+        raise SystemExit("os.write failure did not propagate")
+finally:
+    os.write = real_write
+if temps() or (root / "tasks/probe-write.md").exists():
+    raise SystemExit(f"temp left after os.write failure: {temps()}")
+
+real_fsync = os.fsync
+def boom_fsync(fd):
+    raise OSError("fsync")
+os.fsync = boom_fsync
+try:
+    try:
+        mod.atomic_write(root, "tasks/probe-fsync.md", b"hi")
+    except OSError:
+        pass
+    else:
+        raise SystemExit("os.fsync failure did not propagate")
+finally:
+    os.fsync = real_fsync
+if temps() or (root / "tasks/probe-fsync.md").exists():
+    raise SystemExit(f"temp left after os.fsync failure: {temps()}")
+
+real_replace = os.replace
+def boom_replace(src, dst):
+    raise OSError("replace")
+os.replace = boom_replace
+try:
+    try:
+        mod.atomic_write(root, "tasks/probe-replace.md", b"hi")
+    except OSError:
+        pass
+    else:
+        raise SystemExit("os.replace failure did not propagate")
+finally:
+    os.replace = real_replace
+if temps() or (root / "tasks/probe-replace.md").exists():
+    raise SystemExit(f"temp left after os.replace failure: {temps()}")
+
+def boom_load(_root):
+    raise RuntimeError("boom")
+mod.load_store = boom_load
+buf, err = io.StringIO(), io.StringIO()
+old, old_e = sys.stdout, sys.stderr
+sys.stdout, sys.stderr = buf, err
+try:
+    rc = mod.main(["complete", "--root", str(root), "--id", "01J8E3KDT0X8B4D1W2X5Y6Z7F5"])
+finally:
+    sys.stdout, sys.stderr = old, old_e
+if rc != 1:
+    raise SystemExit(f"unexpected error rc={rc} out={buf.getvalue()!r} err={err.getvalue()!r}")
+if "Traceback" in err.getvalue() or err.getvalue().strip():
+    raise SystemExit(f"unexpected error printed a traceback: {err.getvalue()!r}")
+receipt = json.loads(buf.getvalue())
+if receipt.get("ok") is not False or receipt.get("error") != "fail-closed: unexpected error":
+    raise SystemExit(f"unexpected error receipt: {receipt}")
+print("writer internals ok")
+PY
+
+  # 4312989017: rewrite relative folder links and list-page basenames in the same pass.
+  tw_ok "4312989017 add link list" add --root "$FIX" --kind task-list --title "Link list"
+  read -r LINK_ID LINK_ULID LINK_PATH < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["ulid"], o["path"])' "$FIX.tw.out")
+  [[ -n "$LINK_ID" && "$LINK_PATH" == "tasks/${LINK_ULID}-link-list/${LINK_ULID}-link-list.task-list.md" ]] \
+    || fail "4312989017 link list receipt ($label): $(cat "$FIX.tw.out")"
+  python3 - "$FIX/tasks/index.md" "$LINK_ULID" <<'PY' || fail "4312989017 could not inject relative links ($label)"
+import sys
+path, ulid = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+if not text.endswith("\n"):
+    text += "\n"
+text += "[Trip](<%s-link-list/%s-link-list.task-list.md>)\nAlso %s-link-list.task-list.md\n" % (ulid, ulid, ulid)
+open(path, "w", encoding="utf-8").write(text)
+PY
+  tw_ok "4312989017 rename link list" update --root "$FIX" --id "$LINK_ID" --title "Link pack"
+  python3 - "$FIX/tasks/index.md" "$LINK_ULID" <<'PY' || fail "4312989017 relative links not rewritten ($label)"
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+ulid = sys.argv[2]
+old = "%s-link-list" % ulid
+new = "%s-link-pack" % ulid
+if "[Trip](<%s/%s.task-list.md>)" % (new, new) not in text:
+    raise SystemExit("root relative folder link was not rewritten")
+if "Also %s.task-list.md" % new not in text:
+    raise SystemExit("root list-page basename was not rewritten")
+if old in text:
+    raise SystemExit("old relative folder remains in the root body")
+PY
+  [[ ! -e "$FIX/tasks/${LINK_ULID}-link-list" ]] || fail "4312989017 old link folder remains ($label)"
+  [[ -f "$FIX/tasks/${LINK_ULID}-link-pack/${LINK_ULID}-link-pack.task-list.md" ]] \
+    || fail "4312989017 renamed link list missing ($label)"
+  tw_ok "4312989017 add nested link" add --root "$FIX" --kind task-list --title "Nested link" --task-list "$LINK_ID"
+  read -r NEST_ID NEST_ULID NEST_PATH < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["ulid"], o["path"])' "$FIX.tw.out")
+  [[ "$NEST_PATH" == "tasks/${LINK_ULID}-link-pack/${NEST_ULID}-nested-link/${NEST_ULID}-nested-link.task-list.md" ]] \
+    || fail "4312989017 nested path ($NEST_PATH)"
+  python3 - "$FIX/tasks/index.md" "$FIX/tasks/${LINK_ULID}-link-pack/${LINK_ULID}-link-pack.task-list.md" \
+    "$LINK_ULID" "$NEST_ULID" <<'PY' || fail "4312989017 could not inject nested relative links ($label)"
+import sys
+root_p, parent_p, link_ulid, nest = sys.argv[1:]
+root = open(root_p, encoding="utf-8").read()
+parent = open(parent_p, encoding="utf-8").read()
+if not root.endswith("\n"):
+    root += "\n"
+if not parent.endswith("\n"):
+    parent += "\n"
+root += "[Trip](<%s-link-pack/%s-nested-link/%s-nested-link.task-list.md>)\n" % (link_ulid, nest, nest)
+parent += "[Trip](<%s-nested-link/%s-nested-link.task-list.md>)\nAlso %s-nested-link.task-list.md\n" % (nest, nest, nest)
+open(root_p, "w", encoding="utf-8").write(root)
+open(parent_p, "w", encoding="utf-8").write(parent)
+PY
+  tw_ok "4312989017 rename nested link" update --root "$FIX" --id "$NEST_ID" --title "Nested pack"
+  python3 - "$FIX/tasks/index.md" "$FIX/tasks/${LINK_ULID}-link-pack/${LINK_ULID}-link-pack.task-list.md" \
+    "$LINK_ULID" "$NEST_ULID" <<'PY' || fail "4312989017 nested relative links not rewritten ($label)"
+import sys
+root = open(sys.argv[1], encoding="utf-8").read()
+parent = open(sys.argv[2], encoding="utf-8").read()
+link_ulid, nest = sys.argv[3:]
+old = "%s-nested-link" % nest
+new_root = "[Trip](<%s-link-pack/%s-nested-pack/%s-nested-pack.task-list.md>)" % (link_ulid, nest, nest)
+new_parent = "[Trip](<%s-nested-pack/%s-nested-pack.task-list.md>)" % (nest, nest)
+if new_root not in root:
+    raise SystemExit("root-relative nested link was not rewritten")
+if new_parent not in parent or "Also %s-nested-pack.task-list.md" % nest not in parent:
+    raise SystemExit("parent-relative nested link was not rewritten")
+if old in root or old in parent:
+    raise SystemExit("old nested folder token remains")
+PY
+  [[ ! -e "$FIX/tasks/${LINK_ULID}-link-pack/${NEST_ULID}-nested-link" ]] \
+    || fail "4312989017 old nested folder remains ($label)"
+  # The rewrite is asserted above. Drop the injected links so compile does not
+  # treat the angle-bracket destinations as store paths.
+  python3 - "$FIX/tasks/index.md" "$FIX/tasks/${LINK_ULID}-link-pack/${LINK_ULID}-link-pack.task-list.md" <<'PY' \
+    || fail "4312989017 could not drop injected links ($label)"
+import sys
+for path in sys.argv[1:]:
+    lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
+    kept = [line for line in lines if not line.startswith("[Trip](") and not line.startswith("Also ")]
+    open(path, "w", encoding="utf-8").write("".join(kept))
+PY
+  pass "4312989017 relative rename links ($label)"
+
+  # 4312988824: create uses umask; update keeps the destination mode; move keeps the source mode.
+  (
+    umask 027
+    tw_ok "4312988824 umask create" add --root "$FIX" --title "Umask task" \
+      --related-node "$RELATED" --body "$BODY"
+  ) || fail "4312988824 umask create failed ($label)"
+  read -r UMASK_ID UMASK_PATH < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["path"])' "$FIX.tw.out")
+  python3 - "$FIX/$UMASK_PATH" <<'PY' || fail "4312988824 new file mode ($label)"
+import os, stat, sys
+mode = stat.S_IMODE(os.stat(sys.argv[1]).st_mode)
+if mode != 0o640:
+    raise SystemExit("create mode %s, expected 0o640" % oct(mode))
+PY
+  chmod 604 "$FIX/$UMASK_PATH"
+  tw_ok "4312988824 status keeps mode" update --root "$FIX" --id "$UMASK_ID" --status in_progress
+  python3 - "$FIX/$UMASK_PATH" <<'PY' || fail "4312988824 update did not keep destination mode ($label)"
+import os, stat, sys
+mode = stat.S_IMODE(os.stat(sys.argv[1]).st_mode)
+if mode != 0o604:
+    raise SystemExit("update mode %s, expected 0o604" % oct(mode))
+PY
+  tw_ok "4312988824 add exec list" add --root "$FIX" --kind task-list --title "Exec list"
+  read -r EXEC_ID EXEC_ULID < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["ulid"])' "$FIX.tw.out")
+  EXEC_DIR="$FIX/tasks/${EXEC_ULID}-exec-list"
+  printf '#!/bin/sh\necho ok\n' > "$EXEC_DIR/run.sh"
+  chmod 755 "$EXEC_DIR/run.sh"
+  chmod 640 "$EXEC_DIR/${EXEC_ULID}-exec-list.task-list.md"
+  tw_ok "4312988824 rename exec list" update --root "$FIX" --id "$EXEC_ID" --title "Exec renamed"
+  python3 - "$FIX/tasks/${EXEC_ULID}-exec-renamed/run.sh" \
+    "$FIX/tasks/${EXEC_ULID}-exec-renamed/${EXEC_ULID}-exec-renamed.task-list.md" <<'PY' \
+    || fail "4312988824 move did not keep source mode ($label)"
+import os, stat, sys
+aux = stat.S_IMODE(os.stat(sys.argv[1]).st_mode)
+page = stat.S_IMODE(os.stat(sys.argv[2]).st_mode)
+if aux != 0o755:
+    raise SystemExit("aux mode %s, expected 0o755" % oct(aux))
+if page != 0o640:
+    raise SystemExit("moved page mode %s, expected 0o640" % oct(page))
+PY
+  [[ ! -e "$EXEC_DIR" ]] || fail "4312988824 old exec folder remains ($label)"
+  pass "4312988824 file modes preserved ($label)"
+
+  # 4312988978: remove only an isolated membership entry; otherwise tell the caller to edit manually.
+  tw_ok "4312988978 add mention list" add --root "$FIX" --kind task-list --title "Mention list"
+  read -r MEN_LIST_ID MEN_LIST_ULID MEN_LIST_PATH < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["ulid"], o["path"])' "$FIX.tw.out")
+  tw_ok "4312988978 add clean member" add --root "$FIX" --title "Clean member" \
+    --related-node "$RELATED" --body "$BODY" --task-list "$MEN_LIST_ID"
+  read -r CLEAN_ID < <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task_id"])' "$FIX.tw.out")
+  printf '\nPacking notes stay.\n' >> "$FIX/$MEN_LIST_PATH"
+  tw_ok "4312988978 clear isolated" update --root "$FIX" --id "$CLEAN_ID" --clear-task-list
+  python3 - "$FIX/$MEN_LIST_PATH" "$CLEAN_ID" <<'PY' || fail "4312988978 isolated removal ($label)"
+import re, sys, yaml
+text = open(sys.argv[1], encoding="utf-8").read()
+uri = sys.argv[2]
+if uri in text:
+    raise SystemExit("member URI still in the list body")
+if "Packing notes stay." not in text:
+    raise SystemExit("unrelated prose was removed")
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+if uri in (meta.get("tasks") or []):
+    raise SystemExit("member still in frontmatter")
+PY
+  tw_ok "4312988978 add mixed member" add --root "$FIX" --title "Mixed member" \
+    --related-node "$RELATED" --body "$BODY" --task-list "$MEN_LIST_ID"
+  read -r MIX_ID < <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task_id"])' "$FIX.tw.out")
+  tw_ok "4312988978 add other member" add --root "$FIX" --title "Other member" \
+    --related-node "$RELATED" --body "$BODY" --task-list "$MEN_LIST_ID"
+  read -r OTHER_ID < <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task_id"])' "$FIX.tw.out")
+  printf '\n- Remember %s and also %s before departure.\n' "$MIX_ID" "$OTHER_ID" >> "$FIX/$MEN_LIST_PATH"
+  before="$(hash_tree "$FIX")"
+  tw_run "4312988978 unsafe mention" update --root "$FIX" --id "$MIX_ID" --clear-task-list
+  after="$(hash_tree "$FIX")"
+  [[ "$TW_RC" -ne 0 ]] || fail "4312988978 unsafe mention was accepted ($label)"
+  [[ "$before" == "$after" ]] || fail "4312988978 unsafe mention changed the tree ($label)"
+  grep -Fq "edit manually" "$FIX.tw.out" || fail "4312988978 missing edit manually ($label): $(cat "$FIX.tw.out")"
+  python3 - "$FIX/$MEN_LIST_PATH" <<'PY' || fail "4312988978 could not drop the unsafe line ($label)"
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+kept = [line for line in text.splitlines(keepends=True) if "before departure" not in line]
+open(path, "w", encoding="utf-8").write("".join(kept))
+PY
+  pass "4312988978 isolated membership lines ($label)"
+
+  # 4312988939: a reachable page whose declared type disagrees with its filename must fail closed.
+  cp "$FIX/tasks/index.md" "$FIX.index.type.bak"
+  BAD_DOC="01J8E3KDT0X8B4D1W2X5Y6Z7F6"
+  BAD_DOC_ID="atlas://${AID}/tasks/${BAD_DOC}"
+  python3 - "$FIX" "$BAD_DOC_ID" "$BAD_DOC" <<'PY' || fail "4312988939 could not install document member ($label)"
+import re, sys
+from pathlib import Path
+fix, uri, ulid = sys.argv[1:]
+root = Path(fix)
+idx = root / "tasks" / "index.md"
+text = idx.read_text(encoding="utf-8")
+m = re.match(r"^---\n(.*?)\n---", text, re.S)
+if not m or not re.search(r"^tasks:\n", m.group(1), re.M):
+    raise SystemExit("root tasks block missing")
+inner = re.sub(r"^tasks:\n", "tasks:\n  - %s\n" % uri, m.group(1), count=1, flags=re.M)
+idx.write_text("---\n" + inner + "\n---" + text[m.end():], encoding="utf-8")
+(root / "tasks" / ("%s-doc.md" % ulid)).write_text(
+    "---\ntype: document\ntitle: Not a task\ntask_id: %s\n---\n" % uri,
+    encoding="utf-8",
+)
+PY
+  before="$(hash_tree "$FIX")"
+  tw_run "4312988939 document member" update --root "$FIX" --id "$TID_DEMO" --title "Demo typecheck"
+  after="$(hash_tree "$FIX")"
+  [[ "$TW_RC" -ne 0 ]] || fail "4312988939 document member was accepted ($label)"
+  [[ "$before" == "$after" ]] || fail "4312988939 document member changed the tree ($label)"
+  grep -Fq "declared type does not match filename" "$FIX.tw.out" \
+    || fail "4312988939 document member error ($label): $(cat "$FIX.tw.out" "$FIX.tw.err")"
+  cp "$FIX.index.type.bak" "$FIX/tasks/index.md"
+  rm -f "$FIX/tasks/${BAD_DOC}-doc.md"
+  BAD_LIST="01J8E3KDT0X8B4D1W2X5Y6Z7F7"
+  BAD_LIST_ID="atlas://${AID}/tasks/${BAD_LIST}"
+  python3 - "$FIX" "$BAD_LIST_ID" "$BAD_LIST" <<'PY' || fail "4312988939 could not install misdeclared list ($label)"
+import re, sys
+from pathlib import Path
+fix, uri, ulid = sys.argv[1:]
+root = Path(fix)
+idx = root / "tasks" / "index.md"
+text = idx.read_text(encoding="utf-8")
+m = re.match(r"^---\n(.*?)\n---", text, re.S)
+if not m or not re.search(r"^tasks:\n", m.group(1), re.M):
+    raise SystemExit("root tasks block missing")
+inner = re.sub(r"^tasks:\n", "tasks:\n  - %s\n" % uri, m.group(1), count=1, flags=re.M)
+idx.write_text("---\n" + inner + "\n---" + text[m.end():], encoding="utf-8")
+folder = root / "tasks" / ("%s-badlist" % ulid)
+folder.mkdir()
+(folder / ("%s-badlist.task-list.md" % ulid)).write_text(
+    "---\ntype: task\ntitle: Bad list\ntask_id: %s\ntasks: []\n---\n" % uri,
+    encoding="utf-8",
+)
+PY
+  before="$(hash_tree "$FIX")"
+  tw_run "4312988939 misdeclared list" add --root "$FIX" --title "Should not land" \
+    --related-node "$RELATED" --body "$BODY" --task-list "$BAD_LIST_ID"
+  after="$(hash_tree "$FIX")"
+  [[ "$TW_RC" -ne 0 ]] || fail "4312988939 misdeclared list was accepted ($label)"
+  [[ "$before" == "$after" ]] || fail "4312988939 misdeclared list changed the tree ($label)"
+  grep -Fq "declared type does not match filename" "$FIX.tw.out" \
+    || fail "4312988939 misdeclared list error ($label): $(cat "$FIX.tw.out" "$FIX.tw.err")"
+  cp "$FIX.index.type.bak" "$FIX/tasks/index.md"
+  rm -rf "$FIX/tasks/${BAD_LIST}-badlist"
+  rm -f "$FIX.index.type.bak"
+  tw_ok "4312988939 store loads" update --root "$FIX" --id "$TID_DEMO" --status open --dry-run
+  pass "4312988939 declared type matches filename ($label)"
+
+  # 4312988869 move destinations, 4312988911 index reads, 4312989062 created dirs, mode rollback.
+  python3 - "$TW" "$LFI" "$FIX" "$MEN_LIST_PATH" "$MIX_ID" <<'PY' || fail "4312988824/4312988869/4312988911/4312989062 regressions ($label)"
+import importlib.util, io, json, os, stat, sys
+from pathlib import Path
+
+tw, lfi_path, fix, list_rel, mix_id = sys.argv[1:]
+root = Path(fix)
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+mod = load("tasks_review_regress", tw)
+lfi = load("lfi_review_regress", lfi_path)
+
+# 4312988824: rollback restores the destination mode after a failed update.
+target = root / "tasks" / "mode-keep-4312988824.txt"
+target.write_bytes(b"old\n")
+os.chmod(target, 0o640)
+real_replace = os.replace
+
+def boom_mode(src, dst):
+    if str(dst).endswith("mode-fail-4312988824.txt"):
+        raise OSError("boom")
+    return real_replace(src, dst)
+
+os.replace = boom_mode
+try:
+    try:
+        mod.apply_ops(root, [
+            ("update", "tasks/mode-keep-4312988824.txt", None, b"new\n"),
+            ("create", "tasks/mode-fail-4312988824.txt", None, b"x"),
+        ])
+    except mod.Fail as exc:
+        if "rolled back" not in exc.message:
+            raise SystemExit("4312988824 unexpected rollback error: %s" % exc.message)
+    else:
+        raise SystemExit("4312988824 mode rollback did not fail closed")
+finally:
+    os.replace = real_replace
+if target.read_bytes() != b"old\n" or stat.S_IMODE(target.stat().st_mode) != 0o640:
+    raise SystemExit("4312988824 rollback did not restore destination mode")
+if (root / "tasks" / "mode-fail-4312988824.txt").exists():
+    raise SystemExit("4312988824 failed create was left behind")
+target.unlink()
+
+# 4312988869: a move destination created after planning fails closed.
+store = mod.load_store(root)
+mod.assert_store_unchanged(store, [("move", "tasks/absent-4312988869.txt", "tasks/index.md", b"x")])
+race = root / "tasks" / "race-4312988869.txt"
+race.write_text("raced\n", encoding="utf-8")
+try:
+    try:
+        mod.assert_store_unchanged(store, [("move", "tasks/race-4312988869.txt", "tasks/old.txt", b"x")])
+    except mod.Fail as exc:
+        if "store changed during write" not in exc.message:
+            raise SystemExit("4312988869 unexpected error: %s" % exc.message)
+    else:
+        raise SystemExit("4312988869 move destination was not checked")
+finally:
+    race.unlink()
+
+# 4312988911: render from the list page and member pointers; do not copy the subtree.
+lfi_src = Path(lfi_path).read_text(encoding="utf-8")
+for banned in ("copytree", "mkdtemp", "_copy_tree_nofollow", "shutil", "tempfile"):
+    if banned in lfi_src:
+        raise SystemExit("4312988911 list-folder-index still references %s" % banned)
+folder = root / Path(list_rel).parent
+attach = folder / "huge.bin"
+attach.write_bytes(b"not-a-member")
+list_file = root / list_rel
+meta, _body = lfi.frontmatter(list_file.read_text(encoding="utf-8"))
+rows = []
+for uri in lfi.members_of(meta, list_rel):
+    ulid = lfi.ulid_of(uri)
+    hit = lfi.find_member(root, list_file.parent, ulid)
+    if hit is None:
+        raise SystemExit("4312988911 member %s not found" % uri)
+    path, kind = hit
+    member_meta, _b = lfi.frontmatter(path.read_text(encoding="utf-8"))
+    rows.append((ulid, kind, path.relative_to(list_file.parent).as_posix(), member_meta.get("title") or path.stem))
+expected = lfi.render(list_file, meta, rows)
+got, err = lfi.render_list_folder_index(root, list_rel, None)
+if err or got != expected:
+    raise SystemExit("4312988911 render mismatch: %s" % err)
+reads = []
+real_rt, real_rb, real_open = Path.read_text, Path.read_bytes, Path.open
+
+def tracked_text(self, *args, **kwargs):
+    reads.append(self.name)
+    if self.name == "huge.bin":
+        raise SystemExit("4312988911 read attachment text")
+    return real_rt(self, *args, **kwargs)
+
+def tracked_bytes(self, *args, **kwargs):
+    reads.append(self.name)
+    if self.name == "huge.bin":
+        raise SystemExit("4312988911 read attachment bytes")
+    return real_rb(self, *args, **kwargs)
+
+def tracked_open(self, *args, **kwargs):
+    reads.append(self.name)
+    if self.name == "huge.bin":
+        raise SystemExit("4312988911 opened attachment")
+    return real_open(self, *args, **kwargs)
+
+Path.read_text, Path.read_bytes, Path.open = tracked_text, tracked_bytes, tracked_open
+try:
+    got, err = lfi.render_list_folder_index(root, list_rel, None)
+    if err or got != expected:
+        raise SystemExit("4312988911 hooked render failed: %s" % err)
+    if "huge.bin" in reads:
+        raise SystemExit("4312988911 render read %s" % reads)
+    buf, err_io = io.StringIO(), io.StringIO()
+    old, old_e = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = buf, err_io
+    try:
+        rc = mod.main(["update", "--root", str(root), "--id", mix_id, "--title", "Mixed dry", "--dry-run"])
+    finally:
+        sys.stdout, sys.stderr = old, old_e
+    if rc != 0 or "huge.bin" in reads:
+        raise SystemExit("4312988911 dry-run rc=%s reads=%s out=%s err=%s" % (rc, reads, buf.getvalue(), err_io.getvalue()))
+    receipt = json.loads(buf.getvalue())
+    if receipt.get("dry_run") is not True:
+        raise SystemExit("4312988911 dry-run receipt: %s" % receipt)
+finally:
+    Path.read_text, Path.read_bytes, Path.open = real_rt, real_rb, real_open
+attach.unlink()
+overlay_ulid = "01J8E3KDT0X8B4D1W2X5Y6Z7F8"
+member_ulid = "01J8E3KDT0X8B4D1W2X5Y6Z7F9"
+new_rel = "tasks/%s-overlay/%s-overlay.task-list.md" % (overlay_ulid, overlay_ulid)
+member_rel = "tasks/%s-overlay/%s-item.md" % (overlay_ulid, member_ulid)
+overlay = {
+    new_rel: "---\ntype: task-list\ntitle: Overlay list\ntask_id: atlas://ex/tasks/%s\ntasks:\n  - atlas://ex/tasks/%s\n---\n" % (overlay_ulid, member_ulid),
+    member_rel: "---\ntype: task\ntitle: Overlay item\ntask_id: atlas://ex/tasks/%s\n---\n" % member_ulid,
+}
+got, err = lfi.render_list_folder_index(root, new_rel, overlay)
+if err or "Overlay item" not in got or (root / "tasks" / ("%s-overlay" % overlay_ulid)).exists():
+    raise SystemExit("4312988911 overlay render wrote or failed: %s" % err)
+
+# 4312989062: rollback removes only directories this transaction created, and only when empty.
+pre = root / "tasks" / "empty-pre-4312989062"
+pre.mkdir()
+
+def boom_dir(src, dst):
+    if "created-by-tx" in str(dst):
+        raise OSError("boom")
+    return real_replace(src, dst)
+
+os.replace = boom_dir
+try:
+    try:
+        mod.apply_ops(root, [
+            ("create", "tasks/empty-pre-4312989062/made.md", None, b"x"),
+            ("create", "tasks/created-by-tx/page.md", None, b"y"),
+        ])
+    except mod.Fail as exc:
+        if "rolled back" not in exc.message:
+            raise SystemExit("4312989062 unexpected rollback error: %s" % exc.message)
+    else:
+        raise SystemExit("4312989062 created-dir rollback did not fail closed")
+finally:
+    os.replace = real_replace
+if not pre.is_dir() or (pre / "made.md").exists() or (root / "tasks" / "created-by-tx").exists():
+    raise SystemExit("4312989062 rollback removed a pre-existing dir or left a created dir")
+pre.rmdir()
+
+def boom_retry(src, dst):
+    if "rollback-list" in str(dst):
+        raise OSError("boom")
+    return real_replace(src, dst)
+
+os.replace = boom_retry
+buf, err_io = io.StringIO(), io.StringIO()
+old, old_e = sys.stdout, sys.stderr
+sys.stdout, sys.stderr = buf, err_io
+try:
+    rc = mod.main(["add", "--root", str(root), "--kind", "task-list", "--title", "Rollback list"])
+finally:
+    sys.stdout, sys.stderr = old, old_e
+    os.replace = real_replace
+if rc == 0 or "rolled back" not in buf.getvalue():
+    raise SystemExit("4312989062 failed create rc=%s out=%s err=%s" % (rc, buf.getvalue(), err_io.getvalue()))
+left = list((root / "tasks").glob("*rollback-list*"))
+if left:
+    raise SystemExit("4312989062 left %s" % left)
+buf, err_io = io.StringIO(), io.StringIO()
+sys.stdout, sys.stderr = buf, err_io
+try:
+    rc = mod.main(["add", "--root", str(root), "--kind", "task-list", "--title", "Rollback list"])
+finally:
+    sys.stdout, sys.stderr = old, old_e
+if rc != 0:
+    raise SystemExit("4312989062 retry failed rc=%s out=%s err=%s" % (rc, buf.getvalue(), err_io.getvalue()))
+receipt = json.loads(buf.getvalue())
+if not receipt.get("ok") or not (root / receipt["path"]).is_file():
+    raise SystemExit("4312989062 retry receipt: %s" % receipt)
+print("second-review regressions ok")
+PY
+  pass "4312988824/4312988869/4312988911/4312989062 regressions ($label)"
+
+  rm -f "$FIX.tw.out" "$FIX.tw.err" "$FIX.writer.out" "$FIX.writer.err" \
+    "$FIX.shared.out" "$FIX.shared.err" "$FIX.lock.add.out" "$FIX.lock.add.err" \
+    "$FIX.lock.holder.out" "$FIX.lock.holder.err" "$FIX.lock.ready" "$FIX.lock.release" \
+    "$FIX.race1.out" "$FIX.race1.err" "$FIX.race2.out" "$FIX.race2.err"
+  pass "4d tasks.py writer ($label store)"
 
   python3 "$ATLAS_CLI" compile --root "$FIX" || fail "compile red on $label store (schema_version=$sv)"
   pass "4 atlas compile green on fixture ($label store, schema_version=$sv)"
