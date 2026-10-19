@@ -2,6 +2,19 @@
 
 **Create a new task or a new task list.** Do not use this path to mark an existing task done — that is path **complete**.
 
+## Script (v0.8, preferred)
+
+Prefer the writer. Dry-run first when unsure, then read the JSON receipt and report from it. The script never runs git. The Steps below are the manual fallback when the script is unavailable or exits 3.
+
+```bash
+python3 <skill>/scripts/tasks.py add --root <root> --title "<title>" \
+  [--kind task|task-list] [--related-node <path>] [--body-path <path>|--body "<text>"] \
+  [--task-id <URI>] [--status open|in_progress|done|cancelled] [--assignee <handle> ...] \
+  [--parent <URI>] [--task-list <URI>] [--depends-on <REF> ...] [--created YYYY-MM-DD] [--dry-run]
+```
+
+`REF` is a full `atlas://` URI, a bare ULID, or a store-relative pointer path. Receipt fields: `ok`, `command`, `dry_run`, `atlas_id`, `task_id`, `ulid`, `title`, `kind`, `path`, `body_path`, `task_list`, `parent`, `derived_blocked`, `changes`, `index_refresh`, `warnings`.
+
 ## Activation
 
 Load `references/paths/activation.md` first. Card `path: add`.

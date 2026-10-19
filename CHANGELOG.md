@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `scripts/tasks.py` no longer rewrites untouched frontmatter when it updates an existing page. A status-only update changes only the `task_status` line; quoting, comments, block or flow style, and folded scalars on other keys stay byte-identical. Changed scalars use plain style when that round-trips as the same string.
+
+## [0.8.0] - 2026-10-19
+
+### Added
+
+- `scripts/tasks.py` with subcommands `add`, `update`, and `complete`. One JSON receipt (`ok`, `task_id`, `path`, `changes`, `index_refresh`, `derived_blocked`, and the rest), `--dry-run` (validate, write nothing), and fail-closed checks before any write.
+- Smoke coverage: named check `tasks-writer` and fixture section `4d tasks.py` (both default and SCHEMA 2.0 stores).
+
+### Changed
+
+- SKILL pin 24 and paths `add`, `update`, and `complete` route writes through the script. The existing Steps stay the manual fallback when the script is unavailable or exits 3 (unsupported, for example nested list folder reparent).
+
+### Not changed
+
+- Task and task-list frontmatter, ids, filenames, and the overlay. No reinstall.
+
 ## [0.7.0] - 2026-10-17
 
 ### Added
