@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 try:
@@ -124,6 +126,88 @@ def render(list_file: Path, meta: dict, rows: list[tuple[str, str, str, str]]) -
         else:
             lines.append(f"- `{ulid}` — not found in this folder (unresolved)")
     return "\n".join(lines) + "\n"
+
+
+def _copy_tree_nofollow(root: Path, src: Path, dst: Path) -> None:
+    """Copy a directory tree without following symlinks or leaving root."""
+    dst.mkdir(parents=True, exist_ok=True)
+    for child in src.iterdir():
+        if child.is_symlink() or not contained(root, child):
+            continue
+        target = dst / child.name
+        if child.is_dir():
+            _copy_tree_nofollow(root, child, target)
+        elif child.is_file():
+            target.write_bytes(child.read_bytes())
+
+
+def render_list_folder_index(
+    root: Path,
+    list_rel: str,
+    overlay: dict[str, str | None] | None = None,
+) -> tuple[str, str | None]:
+    """Return ``(index_markdown, error)`` for one list folder after ``overlay``.
+
+    ``overlay`` maps store-relative paths to replacement text, or None to delete.
+    The markdown is exactly what ``render`` / ``find_member`` / ``frontmatter``
+    produce for that folder (same path the CLI uses). A temporary snapshot is
+    used so the walk sees post-overlay paths; nothing is written under ``root``.
+    ``error`` is set when the list file is missing or a member does not resolve.
+    """
+    root = root.resolve()
+    list_rel = list_rel.replace("\\", "/").lstrip("/")
+    folder_rel = str(Path(list_rel).parent).replace("\\", "/")
+    overlay = overlay or {}
+    tmp = tempfile.mkdtemp(prefix="atlas-tasks-idx-")
+    try:
+        snap = Path(tmp).resolve()
+        src = root / folder_rel
+        if src.exists():
+            if src.is_symlink() or not contained(root, src):
+                return "", f"{folder_rel}: symlink or path outside root"
+            _copy_tree_nofollow(root, src, snap / folder_rel)
+        prefix = folder_rel.rstrip("/") + "/"
+        for rel, content in overlay.items():
+            rel = str(rel).replace("\\", "/")
+            if rel != list_rel and not rel.startswith(prefix):
+                continue
+            dest = snap / rel
+            if any(part.is_symlink() for part in dest.parents if part != snap and snap in part.parents):
+                return "", f"{rel}: symlink"
+            if content is None:
+                if dest.is_symlink():
+                    return "", f"{rel}: symlink"
+                if dest.is_file():
+                    dest.unlink()
+                continue
+            if dest.is_symlink():
+                return "", f"{rel}: symlink"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content, encoding="utf-8")
+        list_file = snap / list_rel
+        if not list_file.is_file() or list_file.is_symlink():
+            return "", f"{list_rel}: list file missing after overlay"
+        try:
+            meta, _body = frontmatter(list_file.read_text(encoding="utf-8"))
+            uris = members_of(meta, list_rel)
+        except FrontmatterError as e:
+            return "", str(e)
+        folder = list_file.parent
+        rows: list[tuple[str, str, str, str]] = []
+        for uri in uris:
+            u = ulid_of(uri)
+            hit = find_member(snap, folder, u) if u else None
+            if hit is None:
+                return "", f"{list_rel}: member {uri} not resolved in {folder_rel}/"
+            path, kind = hit
+            try:
+                m2, _b = frontmatter(path.read_text(encoding="utf-8"))
+            except FrontmatterError as e:
+                return "", f"{path.name}: {e}"
+            rows.append((u or "", kind, path.relative_to(folder).as_posix(), m2.get("title") or path.stem))
+        return render(list_file, meta, rows), None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main(argv: list[str] | None = None) -> int:
