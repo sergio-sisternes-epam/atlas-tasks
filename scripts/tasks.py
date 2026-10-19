@@ -17,6 +17,7 @@ import sys
 sys.dont_write_bytecode = True
 
 import argparse
+import fcntl
 import importlib.util
 import json
 import os
@@ -71,18 +72,15 @@ TASK_KEYS = [
 ]
 LIST_KEYS = ["type", "title", "created", "task_id", "task_list", "tasks"]
 DOC_KEYS = ["type", "title", "created"]
-TASK_REQUIRED = [
+# Mandatory on an existing task page. related_node is recommended; assignees,
+# parent, sub_tasks, task_list, and relates_to are optional (extension contract).
+TASK_MANDATORY = [
     "type",
     "title",
     "created",
     "task_id",
     "task_status",
     "body_path",
-    "related_node",
-    "assignees",
-    "parent",
-    "sub_tasks",
-    "relates_to",
 ]
 POINTER_BODY = (
     "\n## Content\n\n"
@@ -265,6 +263,32 @@ _NUMBERISH = re.compile(
 )
 _DATEISH = re.compile(r"^\d{4}-\d{1,2}-\d{1,2}(?:[T t].*)?$")
 _FM_RE = re.compile(r"^---\n(.*?)\n---\n?", re.S)
+
+
+def detect_newline(data: bytes) -> str:
+    """Return the page's newline convention: CRLF, bare CR, or LF."""
+    crlf = data.count(b"\r\n")
+    lf = data.count(b"\n") - crlf
+    cr = data.count(b"\r") - crlf
+    if crlf and crlf >= lf and crlf >= cr:
+        return "\r\n"
+    if cr and cr > lf:
+        return "\r"
+    return "\n"
+
+
+def to_lf(text: str, newline: str) -> str:
+    if newline == "\r\n":
+        return text.replace("\r\n", "\n")
+    if newline == "\r":
+        return text.replace("\r", "\n")
+    return text
+
+
+def from_lf(text: str, newline: str) -> str:
+    if newline == "\n":
+        return text
+    return text.replace("\n", newline)
 
 
 def quote_scalar(value: str) -> str:
@@ -479,6 +503,7 @@ class Page:
         self.fm_inner: str | None = None
         self.fm_close = "\n---\n"
         self.key_spans: list[tuple[str, int, int]] | None = None
+        self.newline = "\n"
         if original is not None:
             source = frontmatter_source(original)
             if source is not None:
@@ -591,7 +616,8 @@ class Page:
         return rendered + self.body
 
     def output_bytes(self) -> bytes:
-        return self.output_text().encode("utf-8")
+        text = from_lf(self.output_text(), self.newline)
+        return text.encode("utf-8")
 
 
 class Store:
@@ -602,8 +628,9 @@ class Store:
         self.by_uri: dict[str, Page] = {}
         self.by_ulid: dict[str, Page] = {}
         self.reached_folders: set[str] = set()
-        self.extra_moves: list[tuple[str, str, str]] = []
-        self.relocated_index: dict[str, tuple[str, str | None]] = {}
+        self.extra_moves: list[tuple[str, str, bytes]] = []
+        self.relocated_index: dict[str, tuple[str, bytes]] = {}
+        self.loaded: dict[str, tuple[bytes | None, int | None]] = {}
         self.root_page: Page | None = None
 
     def add_page(self, page: Page, is_root: bool = False) -> None:
@@ -626,10 +653,41 @@ class Store:
         dest = self.root / new_rel
         if dest.exists() and not dest.is_symlink():
             raise Fail("target path already exists")
+        # Pin 8: path-form dependency/blocks still resolve only while the old
+        # lookup exists. Convert them to the stable URI before dropping it.
+        self._stabilize_path_edges(page)
         old = page.rel
         self.pages.pop(old, None)
         page.rel = new_rel
         self.pages[new_rel] = page
+
+    def _stabilize_path_edges(self, page: Page) -> None:
+        uri = page.uri
+        if not uri:
+            return
+        for other in list(self.pages.values()):
+            edges = other.meta.get("relates_to")
+            if not isinstance(edges, list):
+                continue
+            changed = False
+            updated = []
+            for edge in edges:
+                path = edge.get("path") if isinstance(edge, dict) else None
+                if (
+                    isinstance(edge, dict)
+                    and edge.get("kind") in ("dependency", "blocks")
+                    and isinstance(path, str)
+                    and parse_uri(path) is None
+                    and self.pages.get(path) is page
+                ):
+                    copied = dict(edge)
+                    copied["path"] = uri
+                    updated.append(copied)
+                    changed = True
+                else:
+                    updated.append(edge)
+            if changed:
+                other.set_meta("relates_to", updated)
 
     def resolve(self, ref: str) -> Page:
         ref = (ref or "").strip()
@@ -679,22 +737,107 @@ class Store:
                 ov[page.rel] = page.output_text()
             if moved and page.original_rel:
                 ov[page.original_rel] = None
-        for old, new, text in self.extra_moves:
-            ov[new] = text
+        for old, new, payload in self.extra_moves:
+            if old == new:
+                continue
             ov[old] = None
+            try:
+                ov[new] = payload.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
         return ov
 
 
-def read_page(root: Path, rel: str) -> Page:
+def snapshot_file(store: Store, rel: str) -> bytes | None:
+    """Record the first-read bytes and mtime of a store file. Later calls reuse that snapshot."""
+    if rel in store.loaded:
+        return store.loaded[rel][0]
+    path = store.root / rel
+    if path.is_symlink():
+        raise Fail("refuse symlink or path outside root")
+    if not path.exists():
+        store.loaded[rel] = (None, None)
+        return None
+    if not path.is_file() or not contained(store.root, path):
+        raise Fail("refuse symlink or path outside root")
+    st = path.stat()
+    data = path.read_bytes()
+    st2 = path.stat()
+    if st.st_mtime_ns != st2.st_mtime_ns or st.st_size != len(data):
+        raise Fail("fail-closed: store changed during write; retry")
+    store.loaded[rel] = (data, st2.st_mtime_ns)
+    return data
+
+
+def read_page(root: Path, rel: str, store: Store | None = None) -> Page:
     path = safe_path(root, rel)
-    if not path.is_file():
+    if not path.is_file() or path.is_symlink():
         raise Fail(f"missing page {rel}")
-    text = path.read_text(encoding="utf-8")
+    if store is not None:
+        data = snapshot_file(store, rel)
+        if data is None:
+            raise Fail(f"missing page {rel}")
+    else:
+        data = path.read_bytes()
+    newline = detect_newline(data)
+    try:
+        text = to_lf(data.decode("utf-8"), newline)
+    except UnicodeDecodeError as e:
+        raise Fail(f"{rel}: page is not valid UTF-8") from e
     meta, body = split_page(text)
     kind = str(meta.get("type") or "")
     if kind not in ("task", "task-list", "document"):
         kind = "other"
-    return Page(rel, meta, body, text, kind if kind != "other" else str(meta.get("type") or "other"))
+    page = Page(rel, meta, body, text, kind if kind != "other" else str(meta.get("type") or "other"))
+    page.newline = newline
+    return page
+
+
+def open_tasks_lock(root: Path, exclusive: bool) -> int:
+    """Advisory flock on the tasks directory. Does not create a lock file."""
+    if not root.is_dir() or root.is_symlink():
+        raise Fail("incomplete: missing Atlas id")
+    tasks = root / "tasks"
+    if tasks.is_symlink() or not tasks.is_dir() or not contained(root, tasks):
+        raise Fail("tasks/index.md missing or not type: task-list; run mount-overlay or migrate")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(tasks, flags)
+    except OSError as e:
+        raise Fail("tasks/index.md missing or not type: task-list; run mount-overlay or migrate") from e
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+    except OSError as e:
+        os.close(fd)
+        raise Fail("fail-closed: could not lock tasks directory") from e
+    return fd
+
+
+class StoreLock:
+    """Hold the tasks-directory lock across load, validate, and write."""
+
+    def __init__(self, root: Path, exclusive: bool):
+        self.root = root
+        self.exclusive = exclusive
+        self.fd: int | None = None
+
+    def __enter__(self) -> "StoreLock":
+        self.fd = open_tasks_lock(self.root, self.exclusive)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        fd = self.fd
+        self.fd = None
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+        return False
 
 
 def load_store(root: Path) -> Store:
@@ -709,7 +852,11 @@ def load_store(root: Path) -> Store:
     if not index.is_file() or index.is_symlink():
         raise Fail("tasks/index.md missing or not type: task-list; run mount-overlay or migrate")
     store = Store(root, atlas_id)
-    root_page = read_page(root, "tasks/index.md")
+    for rel in ("CONTRACT.json", "SCHEMA.json", "schema.d/atlas-tasks.json"):
+        candidate = root / rel
+        if candidate.is_file() and not candidate.is_symlink() and contained(root, candidate):
+            snapshot_file(store, rel)
+    root_page = read_page(root, "tasks/index.md", store)
     if root_page.meta.get("type") != "task-list":
         raise Fail("tasks/index.md missing or not type: task-list; run mount-overlay or migrate")
     root_page.kind = "task-list"
@@ -735,7 +882,7 @@ def load_store(root: Path) -> Store:
             rel = path.relative_to(root).as_posix()
             page = store.pages.get(rel)
             if page is None:
-                page = read_page(root, rel)
+                page = read_page(root, rel, store)
                 if kind == "list":
                     page.kind = "task-list"
                 elif kind == "task":
@@ -780,15 +927,26 @@ def remove_mention_lines(body: str, uri: str) -> str:
 
 
 def rewrite_paths(store: Store, pairs: list[tuple[str, str]]) -> None:
+    """Replace path strings once, longest match first, over the original body only."""
+    unique: list[tuple[str, str]] = []
+    seen: set[str] = set()
     ordered = sorted((old, new) for old, new in pairs if old and old != new)
     ordered.sort(key=lambda item: len(item[0]), reverse=True)
-    if not ordered:
+    for old, new in ordered:
+        if old in seen:
+            continue
+        seen.add(old)
+        unique.append((old, new))
+    if not unique:
         return
+    pattern = re.compile("|".join(re.escape(old) for old, _new in unique))
+    mapping = dict(unique)
+
+    def repl(match: re.Match) -> str:
+        return mapping[match.group(0)]
+
     for page in list(store.pages.values()):
-        body = page.body
-        for old, new in ordered:
-            body = body.replace(old, new)
-        page.set_body(body)
+        page.set_body(pattern.sub(repl, page.body))
 
 
 def append_unique(page: Page, key: str, uri: str) -> None:
@@ -1110,12 +1268,13 @@ def add_list(store: Store, args, affected: list[str]) -> Page:
 def rename_title(store: Store, page: Page, title: str, affected: list[str]) -> None:
     title = one_line(title, "title")
     old_rel = page.rel
-    page.set_meta("title", title)
     if page is store.root_page:
+        page.set_meta("title", title)
         return  # pin 16/21: root path stays tasks/index.md
     ulid = page.ulid
     name = file_safe_name(title)
     if page.kind == "task":
+        page.set_meta("title", title)
         folder = Path(old_rel).parent.as_posix()
         new_rel = f"{folder}/{ulid}-{name}.md"
         if new_rel != old_rel:
@@ -1127,6 +1286,21 @@ def rename_title(store: Store, page: Page, title: str, affected: list[str]) -> N
     parent_folder = Path(old_folder).parent.as_posix()
     new_folder = f"{parent_folder}/{ulid}-{name}"
     new_rel = f"{new_folder}/{ulid}-{name}.task-list.md"
+    if old_folder != new_folder:
+        dest = store.root / new_folder
+        if dest.is_symlink() or dest.exists():
+            raise Fail("target path already exists")
+    page.set_meta("title", title)
+    if old_folder == new_folder:
+        # Same folder: do not relocate onto itself (that deletes the index and
+        # auxiliary files). Still rename the list page when its basename changes.
+        if new_rel != old_rel:
+            store.move_page(page, new_rel)
+            rewrite_paths(store, [(old_rel, new_rel), (Path(old_rel).name, Path(new_rel).name)])
+        mark(affected, new_folder)
+        if parent_folder != "tasks":
+            mark(affected, parent_folder)
+        return
     move_list_folder(store, page, old_folder, new_folder, new_rel)
     rewrite_paths(
         store,
@@ -1142,6 +1316,11 @@ def rename_title(store: Store, page: Page, title: str, affected: list[str]) -> N
 
 
 def move_list_folder(store: Store, list_page: Page, old_folder: str, new_folder: str, new_rel: str) -> None:
+    if old_folder == new_folder:
+        return
+    dest_dir = store.root / new_folder
+    if dest_dir.is_symlink() or dest_dir.exists():
+        raise Fail("target path already exists")
     files = []
     base = store.root / old_folder
     if base.is_dir() and not base.is_symlink():
@@ -1150,11 +1329,10 @@ def move_list_folder(store: Store, list_page: Page, old_folder: str, new_folder:
                 continue
             files.append(path.relative_to(store.root).as_posix())
     old_index = f"{old_folder}/index.md"
-    index_text = None
     if old_index in files:
-        index_text = (store.root / old_index).read_text(encoding="utf-8")
-        store.relocated_index[new_folder] = (old_index, index_text)
-    moved = set()
+        index_raw = snapshot_file(store, old_index)
+        if index_raw is not None:
+            store.relocated_index[new_folder] = (old_index, index_raw)
     for rel in files:
         if rel == old_index:
             continue
@@ -1162,10 +1340,11 @@ def move_list_folder(store: Store, list_page: Page, old_folder: str, new_folder:
         dest = new_rel if rel == list_page.rel else f"{new_folder}/{suffix}"
         if rel in store.pages:
             store.move_page(store.pages[rel], dest)
-            moved.add(rel)
         else:
-            text = (store.root / rel).read_text(encoding="utf-8")
-            store.extra_moves.append((rel, dest, text))
+            data = snapshot_file(store, rel)
+            if data is None or rel == dest:
+                continue
+            store.extra_moves.append((rel, dest, data))
     if list_page.rel != new_rel:
         store.move_page(list_page, new_rel)
     store.reached_folders.add(new_folder)
@@ -1334,6 +1513,25 @@ def post_exists(store: Store, rel: str, overlay: dict[str, str | None]) -> bool:
     return exists_inside(store.root, rel)
 
 
+def _path_dir(rel: str) -> str:
+    parent = Path(norm_rel(rel)).parent.as_posix()
+    return "" if parent == "." else parent
+
+
+def beside_related(root: Path, body_path: str, related: str) -> bool:
+    """Pin 5: body directory matches the related node's directory after the write.
+
+    A file node shares its parent directory. A directory node is that directory
+    (same rule as body_rel_for).
+    """
+    node = root / related
+    if node.is_dir() and not node.is_symlink():
+        related_dir = norm_rel(related)
+    else:
+        related_dir = _path_dir(related)
+    return _path_dir(body_path) == related_dir
+
+
 def validate_changed(store: Store, required: list[str], overlay: dict[str, str | None]) -> None:
     for page in store.pages.values():
         moved = page.original_rel is not None and page.original_rel != page.rel
@@ -1352,36 +1550,42 @@ def validate_changed(store: Store, required: list[str], overlay: dict[str, str |
             if tasks is not None and not isinstance(tasks, list):
                 raise Fail("tasks must be a list of atlas:// URIs")
         elif page.kind == "task":
-            for key in TASK_REQUIRED:
+            for key in TASK_MANDATORY:
                 if key not in page.meta:
                     raise Fail(f"task missing {key}")
             if page.meta.get("type") != "task":
                 raise Fail("type must be task")
+            if not str(page.meta.get("title") or "").strip():
+                raise Fail("title is required")
+            if not str(page.meta.get("created") or "").strip():
+                raise Fail("created is required")
             if page.meta.get("task_status") not in ALLOWED_STATUS:
                 raise Fail("task_status must be open|in_progress|done|cancelled")
             parsed = parse_uri(str(page.meta.get("task_id") or ""))
             if not parsed or parsed[0] != store.atlas_id:
                 raise Fail("task_id must be atlas://<atlas_id>/tasks/<ULID>")
-            if not isinstance(page.meta.get("assignees"), list):
+            if "assignees" in page.meta and not isinstance(page.meta.get("assignees"), list):
                 raise Fail("assignees must be a list")
-            if not isinstance(page.meta.get("sub_tasks"), list):
+            if "parent" in page.meta and not blank(page.meta.get("parent")):
+                parent = page.meta.get("parent")
+                if not isinstance(parent, str) or parse_uri(parent) is None:
+                    raise Fail("parent must be a same-Atlas atlas:// URI")
+            if "sub_tasks" in page.meta and not isinstance(page.meta.get("sub_tasks"), list):
                 raise Fail("sub_tasks must be a list")
-            if not isinstance(page.meta.get("relates_to"), list):
+            if "relates_to" in page.meta and not isinstance(page.meta.get("relates_to"), list):
                 raise Fail("relates_to must be a list")
-            if not str(page.meta.get("title") or "").strip():
-                raise Fail("title is required")
-            if not str(page.meta.get("created") or "").strip():
-                raise Fail("created is required")
             tl = page.meta.get("task_list")
             if not blank(tl) and tl == store.root_page.uri:
                 raise Fail("task never stores root URI")
             body_path = str(page.meta.get("body_path") or "")
-            related = str(page.meta.get("related_node") or "")
-            if not post_exists(store, body_path, overlay) or not (store.root / body_path).suffix:
-                if not post_exists(store, body_path, overlay):
-                    raise Fail("body_path does not exist")
-            if not post_exists(store, related, overlay):
-                raise Fail("related_node does not exist")
+            if not post_exists(store, body_path, overlay):
+                raise Fail("body_path does not exist")
+            if "related_node" in page.meta and not blank(page.meta.get("related_node")):
+                related = str(page.meta.get("related_node"))
+                if not post_exists(store, related, overlay):
+                    raise Fail("related_node does not exist")
+                if not beside_related(store.root, body_path, related):
+                    raise Fail("body_path is not beside related_node")
         page.output_text()
 
 
@@ -1495,14 +1699,14 @@ def compliance(store: Store, touched: set[str]) -> None:
 
 
 def derived_blocked(store: Store, page: Page) -> bool:
-    # pin 9
+    # pin 9: resolve pointer paths before treating a target as a remote
     if page.kind != "task":
         return False
     for edge in page.meta.get("relates_to") or []:
         if not isinstance(edge, dict) or edge.get("kind") != "dependency":
             continue
-        target = edge.get("path")
-        parsed = parse_uri(target) if isinstance(target, str) else None
+        resolved = edge_uri(store, edge.get("path"))
+        parsed = parse_uri(resolved) if isinstance(resolved, str) else None
         if parsed is None or parsed[0] != store.atlas_id:
             return True
         other = store.by_ulid.get(parsed[1])
@@ -1539,23 +1743,34 @@ def plan_indexes(store: Store, affected: list[str]) -> tuple[list[dict], list[di
         if err:
             raise Fail(err)
         idx_rel = f"{folder}/index.md"
-        old_rel, old_text = store.relocated_index.get(folder, (None, None))
+        old_rel, old_raw = store.relocated_index.get(folder, (None, None))
         existing = None
-        existing_rel = idx_rel
         if old_rel:
-            existing = old_text
-            existing_rel = old_rel
+            if old_raw is None:
+                existing = None
+            else:
+                try:
+                    existing = to_lf(old_raw.decode("utf-8"), detect_newline(old_raw))
+                except UnicodeDecodeError:
+                    store.extra_moves.append((old_rel, idx_rel, old_raw))
+                    refresh.append({"path": idx_rel, "action": "skip-foreign"})
+                    warnings.append(f"hand-written index.md left untouched: {idx_rel}")
+                    continue
         else:
             path = store.root / idx_rel
             if path.is_symlink():
                 raise Fail("refuse symlink or path outside root")
-            if path.is_file() and contained(store.root, path):
-                existing = path.read_text(encoding="utf-8")
+            raw = snapshot_file(store, idx_rel)
+            if raw is not None:
+                try:
+                    existing = to_lf(raw.decode("utf-8"), detect_newline(raw))
+                except UnicodeDecodeError as e:
+                    raise Fail(f"{idx_rel}: index.md is not valid UTF-8") from e
         if existing is not None and not index_owned(existing):
             refresh.append({"path": idx_rel, "action": "skip-foreign"})
             warnings.append(f"hand-written index.md left untouched: {idx_rel}")
-            if old_rel and old_text is not None:
-                store.extra_moves.append((old_rel, idx_rel, old_text))
+            if old_rel and old_raw is not None and old_rel != idx_rel:
+                store.extra_moves.append((old_rel, idx_rel, old_raw))
             continue
         if existing == content and not old_rel:
             refresh.append({"path": idx_rel, "action": "ok"})
@@ -1563,7 +1778,7 @@ def plan_indexes(store: Store, affected: list[str]) -> tuple[list[dict], list[di
         action = "update" if existing is not None and not old_rel else "create"
         refresh.append({"path": idx_rel, "action": action})
         op = {"action": action, "path": idx_rel, "content": content}
-        if old_rel:
+        if old_rel and old_rel != idx_rel:
             op["delete"] = old_rel
         ops.append(op)
     return refresh, ops, warnings
@@ -1589,13 +1804,16 @@ def collect_ops(store: Store, index_ops: list[dict]) -> tuple[list[dict], list[t
         else:
             changes.append({"action": "update", "path": page.rel})
             write_ops.append(("update", page.rel, None, content))
-    for old, new, text in store.extra_moves:
+    for old, new, payload in store.extra_moves:
+        if not old or old == new:
+            continue
+        content = payload if isinstance(payload, bytes) else str(payload).encode("utf-8")
         if new in index_paths:
             changes.append({"action": "delete", "path": old})
             write_ops.append(("delete", old, None, None))
             continue
         changes.append({"action": "move", "path": new, "from": old})
-        write_ops.append(("move", new, old, text.encode("utf-8")))
+        write_ops.append(("move", new, old, content))
     for op in index_ops:
         changes.append({"action": op["action"], "path": op["path"]})
         write_ops.append((op["action"], op["path"], None, op["content"].encode("utf-8")))
@@ -1630,21 +1848,32 @@ def atomic_write(root: Path, rel: str, data: bytes) -> None:
     if dest.is_symlink():
         raise Fail("refuse symlink or path outside root")
     fd, tmp_name = tempfile.mkstemp(prefix=".tasks-", suffix=".tmp", dir=str(parent))
+    committed = False
     try:
-        os.write(fd, data)
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise Fail("write failed")
+            view = view[written:]
         os.fsync(fd)
-    finally:
         os.close(fd)
-    try:
+        fd = -1
         if dest.is_symlink():
             raise Fail("refuse symlink or path outside root")
         os.replace(tmp_name, dest)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+        committed = True
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if not committed:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
 
 
 def safe_unlink(root: Path, rel: str) -> None:
@@ -1671,6 +1900,29 @@ def prune_empty(root: Path, rel: str) -> None:
         except OSError:
             break
         parent = parent.parent
+
+
+def assert_store_unchanged(store: Store, write_ops: list[tuple]) -> None:
+    """Fail closed when a file read or touched no longer matches the loaded snapshot."""
+    for rel, (data, mtime) in store.loaded.items():
+        path = store.root / rel
+        if path.is_symlink():
+            raise Fail("fail-closed: store changed during write; retry")
+        if data is None:
+            if path.exists():
+                raise Fail("fail-closed: store changed during write; retry")
+            continue
+        if not path.is_file() or not contained(store.root, path):
+            raise Fail("fail-closed: store changed during write; retry")
+        st = path.stat()
+        if st.st_mtime_ns != mtime or path.read_bytes() != data:
+            raise Fail("fail-closed: store changed during write; retry")
+    for action, path, _src, _content in write_ops:
+        if action != "create" or path in store.loaded:
+            continue
+        dest = store.root / path
+        if dest.exists() or dest.is_symlink():
+            raise Fail("fail-closed: store changed during write; retry")
 
 
 def apply_ops(root: Path, write_ops: list[tuple]) -> None:
@@ -1733,6 +1985,7 @@ def finish(command: str, dry: bool, store: Store, page: Page, affected: list[str
     # Index bytes are not part of the page overlay; re-check after planning.
     changes, write_ops = collect_ops(store, index_ops)
     if not dry:
+        assert_store_unchanged(store, write_ops)
         apply_ops(store.root, write_ops)
     return {
         "ok": True,
@@ -1756,32 +2009,35 @@ def finish(command: str, dry: bool, store: Store, page: Page, affected: list[str
 
 def cmd_add(args) -> dict:
     root = Path(args.root).resolve()
-    store = load_store(root)
-    affected: list[str] = []
-    if args.kind == "task-list":
-        page = add_list(store, args, affected)
-    else:
-        page = add_task(store, args, affected)
-    return finish("add", args.dry_run, store, page, affected)
+    with StoreLock(root, exclusive=not args.dry_run):
+        store = load_store(root)
+        affected: list[str] = []
+        if args.kind == "task-list":
+            page = add_list(store, args, affected)
+        else:
+            page = add_task(store, args, affected)
+        return finish("add", args.dry_run, store, page, affected)
 
 
 def cmd_update(args) -> dict:
     root = Path(args.root).resolve()
-    store = load_store(root)
-    affected: list[str] = []
-    page = update_page(store, args, affected)
-    if page.kind == "task":
-        folder = Path(page.rel).parent.as_posix()
-        if folder != "tasks" and (args.title or args.task_list or args.clear_task_list):
-            mark(affected, folder)
-    return finish("update", args.dry_run, store, page, affected)
+    with StoreLock(root, exclusive=not args.dry_run):
+        store = load_store(root)
+        affected: list[str] = []
+        page = update_page(store, args, affected)
+        if page.kind == "task":
+            folder = Path(page.rel).parent.as_posix()
+            if folder != "tasks" and (args.title or args.task_list or args.clear_task_list):
+                mark(affected, folder)
+        return finish("update", args.dry_run, store, page, affected)
 
 
 def cmd_complete(args) -> dict:
     root = Path(args.root).resolve()
-    store = load_store(root)
-    page = complete_page(store, args.id)
-    return finish("complete", args.dry_run, store, page, [])
+    with StoreLock(root, exclusive=not args.dry_run):
+        store = load_store(root)
+        page = complete_page(store, args.id)
+        return finish("complete", args.dry_run, store, page, [])
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1846,6 +2102,10 @@ def main(argv: list[str] | None = None) -> int:
         message = exc.message if exc.message.startswith("fail-closed:") else f"fail-closed: {exc.message}"
         print(json.dumps({"ok": False, "command": args.command, "error": message}, ensure_ascii=False))
         return exc.code
+    except Exception:
+        command = getattr(args, "command", None)
+        print(json.dumps({"ok": False, "command": command, "error": "fail-closed: unexpected error"}, ensure_ascii=False))
+        return 1
     print(json.dumps(receipt, ensure_ascii=False))
     return 0
 
