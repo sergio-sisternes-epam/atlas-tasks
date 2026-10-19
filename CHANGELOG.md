@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- `scripts/tasks.py` no longer rewrites untouched frontmatter when it updates an existing page. A status-only update changes only the `task_status` line; quoting, comments, block or flow style, and folded scalars on other keys stay byte-identical. Changed scalars use plain style when that round-trips as the same string.
-
 ## [0.8.0] - 2026-10-19
 
 ### Added
@@ -25,13 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Not changed
 
 - Task and task-list frontmatter, ids, filenames, and the overlay. No reinstall.
-
-### Fixed
-
-- A list rename that does not change the folder name no longer deletes that folder's index or auxiliary files, and a rename into an existing folder is rejected. Attachments move with the folder as raw bytes. Body links are rewritten in one pass, longest match first, so a new folder name that extends the old one is not doubled.
-- Status updates and completion keep the page's newline convention, so a CRLF task changes only the `task_status` line. Optional frontmatter fields are checked only when present; a page that omits them is not rewritten to add them.
-- Moving a page rewrites path-form dependency and blocks edges that point at it to stable task URIs. `derived_blocked` resolves those paths and treats only an unresolved or non-terminal blocker as blocked.
-- Each store write is serialized on the tasks directory. If a file changes after it was read, the command fails closed and writes nothing. A failed write removes its temporary file.
 
 ## [0.7.0] - 2026-10-17
 
