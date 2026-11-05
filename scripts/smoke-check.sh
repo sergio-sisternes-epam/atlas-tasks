@@ -2060,6 +2060,7 @@ Root task list: other lists and loose tasks only. Child-list members are not loo
 | ${U_LIST} | Trip | list | tasks/${U_LIST}-${N_LIST}/${U_LIST}-${N_LIST}.task-list.md |  |  |  |  |  |  |  |
 | ${U_DEMO} | Demo task | open | tasks/${U_DEMO}-${N_DEMO}.md | knowledge/demo/todo-demo.md | knowledge/demo/note.md | alice |  |  | no |  |
 | ${U_PARENT} | Parent A | open | tasks/${U_PARENT}-${N_PARENT}.md | knowledge/demo/todo-demo.md | knowledge/demo/note.md |  |  |  | no |  |
+| ${U_CHILD} | Child B | in_progress | tasks/${U_LIST}-${N_LIST}/${U_CHILD}-${N_CHILD}.md | knowledge/demo/todo-demo.md | knowledge/demo/note.md | bob | ${TID_PARENT} | ${TID_DEMO} | yes | ${TID_LIST} |
 MD
 
   [[ -f "$FIX/tasks/index.md" ]] || fail "missing index"
@@ -2160,6 +2161,9 @@ PY
   [[ "$before" == "$after" ]] || fail "tasks.py dry-run wrote files ($label)"
   printf '%s\n' "$dry" | python3 -c 'import json,sys; o=json.load(sys.stdin); assert o["ok"] is True and o["dry_run"] is True and o["command"]=="add"' \
     || fail "tasks.py dry-run receipt ($label)"
+  rc="$(assert_unchanged "body source conflict" add --root "$FIX" --title "Nope" \
+    --related-node "$RELATED" --body "$BODY" --body-path "knowledge/demo/todo-demo.md")"
+  [[ "$rc" == "2" ]] || fail "--body and --body-path must exit 2, got $rc ($label)"
 
   loose="$(PYTHONDONTWRITEBYTECODE=1 python3 "$TW" add --root "$FIX" --title "Loose task" \
     --related-node "$RELATED" --body "$BODY")"
@@ -2175,6 +2179,18 @@ meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
 assert meta["type"] == "task" and meta["task_id"] == sys.argv[2]
 assert meta["task_status"] == "open" and "task_list" not in meta
 assert meta["title"] == "Loose task"
+PY
+  cp "$FIX/$LOOSE_PATH" "$FIX/tasks/${LOOSE_ULID}-shadow.md"
+  rc="$(assert_unchanged "ambiguous reached member" update --root "$FIX" --id "$LOOSE_ID" --status done)"
+  grep -Fq "ambiguous member $LOOSE_ULID" "$FIX.writer.out" \
+    || fail "ambiguous reached ULID error ($label): $(cat "$FIX.writer.out" "$FIX.writer.err")"
+  rm -f "$FIX/tasks/${LOOSE_ULID}-shadow.md"
+  python3 - "$FIX/tasks/${U_DEMO}-${N_DEMO}.md" "$LOOSE_PATH" <<'PY' || fail "could not add path-form related edge ($label)"
+import sys
+path, target = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+text = text.replace("relates_to:\n", "relates_to:\n  - path: %s\n    kind: related\n" % target, 1)
+open(path, "w", encoding="utf-8").write(text)
 PY
 
   trip="$(PYTHONDONTWRITEBYTECODE=1 python3 "$TW" add --root "$FIX" --title "Trip child" \
@@ -2231,12 +2247,22 @@ PY
   [[ -f "$FIX/$REN_PATH" ]] || fail "renamed file missing ($label)"
   grep -Fq "${LOOSE_ULID}-loose-renamed.md" "$FIX/tasks/index.md" || fail "root mention not rewritten ($label)"
   grep -Fq "${LOOSE_ULID}-loose-task.md" "$FIX/tasks/index.md" && fail "old basename still in root ($label)" || true
+  grep -Fq "Loose renamed — ${LOOSE_ID} — ${REN_PATH}" "$FIX/tasks/index.md" \
+    || fail "owner membership title/path was not refreshed ($label)"
+  python3 - "$FIX/tasks/${U_DEMO}-${N_DEMO}.md" "$LOOSE_ID" <<'PY' || fail "path-form related edge was not stabilized ($label)"
+import re, sys, yaml
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", open(sys.argv[1], encoding="utf-8").read(), re.S).group(1))
+assert any(edge.get("kind") == "related" and edge.get("path") == sys.argv[2] for edge in meta["relates_to"])
+PY
+  printf '\n[Details](<%s>)\n' "${LOOSE_ULID}-loose-renamed.md" >> "$FIX/tasks/index.md"
 
   mov="$(PYTHONDONTWRITEBYTECODE=1 python3 "$TW" update --root "$FIX" --id "$LOOSE_ID" --task-list "$TID_LIST")"
   read -r MOV_PATH < <(printf '%s\n' "$mov" | python3 -c 'import json,sys; o=json.load(sys.stdin); print(o["path"])')
   [[ "$MOV_PATH" == "tasks/${U_LIST}-${N_LIST}/${LOOSE_ULID}-loose-renamed.md" ]] || fail "moved path ($MOV_PATH)"
   [[ -f "$FIX/$MOV_PATH" ]] || fail "moved file missing ($label)"
   [[ ! -e "$FIX/$REN_PATH" ]] || fail "loose path remains after move ($label)"
+  grep -Fq "[Details](<${U_LIST}-${N_LIST}/${LOOSE_ULID}-loose-renamed.md>)" "$FIX/tasks/index.md" \
+    || fail "relative Markdown link was not rebased on membership move ($label)"
   python3 - "$FIX/tasks/index.md" "$FIX/tasks/${U_LIST}-${N_LIST}/${U_LIST}-${N_LIST}.task-list.md" \
     "$FIX/tasks/${U_LIST}-${N_LIST}/index.md" "$LOOSE_ID" "$LOOSE_ULID" <<'PY' || fail "move membership ($label)"
 import re, sys, yaml
@@ -2380,6 +2406,8 @@ import sys
 open(sys.argv[1], "wb").write(b"\xff\xfe\x00\x01not-utf8")
 PY
   printf 'keep-notes\n' > "$TRIP_DIR/notes.txt"
+  printf 'same attachment basename\n' > "$TRIP_DIR/${U_LIST}-trip-notes.txt"
+  printf '\n[Trip notes](<%s-trip/%s-trip-notes.txt>)\n' "$U_LIST" "$U_LIST" >> "$FIX/tasks/index.md"
   LIST_PAGE="$TRIP_DIR/${U_LIST}-trip.task-list.md"
   [[ -f "$LIST_PAGE" && -f "$TRIP_DIR/index.md" ]] || fail "trip list folder incomplete before case rename ($label)"
   tw_ok "4312597554 case rename" update --root "$FIX" --id "$TID_LIST" --title "TRIP"
@@ -2444,8 +2472,12 @@ assert not old.exists(), "old folder remains"
 assert new.is_dir(), "new folder missing"
 assert (new / "photo.bin").read_bytes() == b"\xff\xfe\x00\x01not-utf8"
 assert (new / "notes.txt").read_text(encoding="utf-8") == "keep-notes\n"
+assert (new / (ulid + "-trip-notes.txt")).read_text(encoding="utf-8") == "same attachment basename\n"
 assert (new / "index.md").is_file()
 assert (new / f"{ulid}-trip-new.task-list.md").is_file()
+root_body = (root / "tasks" / "index.md").read_text(encoding="utf-8")
+assert f"[Trip notes](<{ulid}-trip-new/{ulid}-trip-notes.txt>)" in root_body
+assert f"{ulid}-trip-new-notes.txt" not in root_body
 blob = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in (root / "tasks").rglob("*.md"))
 assert "trip-new-new" not in blob, "folder token rewritten twice"
 assert "UnicodeDecodeError" not in blob
@@ -3040,17 +3072,55 @@ PY
   printf '#!/bin/sh\necho ok\n' > "$EXEC_DIR/run.sh"
   chmod 755 "$EXEC_DIR/run.sh"
   chmod 640 "$EXEC_DIR/${EXEC_ULID}-exec-list.task-list.md"
+  mkdir -p "$EXEC_DIR/private/deep"
+  chmod 700 "$EXEC_DIR" "$EXEC_DIR/private"
+  chmod 711 "$EXEC_DIR/private/deep"
+  cat > "$EXEC_DIR/private/related.md" <<'MD'
+---
+type: document
+title: Related list document
+created: "2026-10-01"
+---
+This related knowledge document stays beside its task body when the parent task-list folder is renamed.
+MD
+  cat > "$EXEC_DIR/private/index.md" <<'MD'
+---
+type: document
+title: Private list subfolder
+created: "2026-10-01"
+---
+Private list subfolder index.
+MD
+  EXEC_RELATED="tasks/${EXEC_ULID}-exec-list/private/related.md"
+  tw_ok "4312988824 add colocated list task" add --root "$FIX" --title "Related inside list" \
+    --related-node "$EXEC_RELATED" --body "$BODY" --task-list "$EXEC_ID"
+  read -r EXEC_TASK_ID EXEC_TASK_PATH < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["path"])' "$FIX.tw.out")
   tw_ok "4312988824 rename exec list" update --root "$FIX" --id "$EXEC_ID" --title "Exec renamed"
   python3 - "$FIX/tasks/${EXEC_ULID}-exec-renamed/run.sh" \
-    "$FIX/tasks/${EXEC_ULID}-exec-renamed/${EXEC_ULID}-exec-renamed.task-list.md" <<'PY' \
+    "$FIX/tasks/${EXEC_ULID}-exec-renamed/${EXEC_ULID}-exec-renamed.task-list.md" \
+    "$FIX/tasks/${EXEC_ULID}-exec-renamed" \
+    "$FIX/tasks/${EXEC_ULID}-exec-renamed/$(basename "$EXEC_TASK_PATH")" "$EXEC_TASK_ID" <<'PY' \
     || fail "4312988824 move did not keep source mode ($label)"
 import os, stat, sys
-aux = stat.S_IMODE(os.stat(sys.argv[1]).st_mode)
-page = stat.S_IMODE(os.stat(sys.argv[2]).st_mode)
+run, page_path, folder, task_path, task_id = sys.argv[1:]
+aux = stat.S_IMODE(os.stat(run).st_mode)
+page = stat.S_IMODE(os.stat(page_path).st_mode)
 if aux != 0o755:
     raise SystemExit("aux mode %s, expected 0o755" % oct(aux))
 if page != 0o640:
     raise SystemExit("moved page mode %s, expected 0o640" % oct(page))
+if stat.S_IMODE(os.stat(folder).st_mode) != 0o700:
+    raise SystemExit("list folder mode was not preserved")
+if stat.S_IMODE(os.stat(os.path.join(folder, "private")).st_mode) != 0o700:
+    raise SystemExit("descendant directory mode was not preserved")
+if stat.S_IMODE(os.stat(os.path.join(folder, "private", "deep")).st_mode) != 0o711:
+    raise SystemExit("nested directory mode was not preserved")
+import re, yaml
+text = open(task_path, encoding="utf-8").read()
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+assert meta["task_id"] == task_id
+assert meta["related_node"] == os.path.join("tasks", os.path.basename(folder), "private", "related.md")
+assert meta["body_path"].startswith(os.path.join("tasks", os.path.basename(folder), "private") + os.sep)
 PY
   [[ ! -e "$EXEC_DIR" ]] || fail "4312988824 old exec folder remains ($label)"
   pass "4312988824 file modes preserved ($label)"
@@ -3210,6 +3280,43 @@ if (root / "tasks" / "mode-fail-4312988824.txt").exists():
     raise SystemExit("4312988824 failed create was left behind")
 target.unlink()
 
+# Incomplete rollback must report affected files and persist their originals.
+recovery_target = root / "tasks" / "recovery-target-review.txt"
+recovery_target.write_bytes(b"original bytes\n")
+replace_calls = 0
+
+def fail_restore(src, dst):
+    global replace_calls
+    if str(dst).endswith("/tasks/recovery-target-review.txt"):
+        replace_calls += 1
+        if replace_calls > 1:
+            raise OSError("restore failed")
+    if str(dst).endswith("recovery-trigger-review.txt"):
+        raise OSError("write failed")
+    return real_replace(src, dst)
+
+os.replace = fail_restore
+try:
+    try:
+        mod.apply_ops(root, [
+            ("update", "tasks/recovery-target-review.txt", None, b"changed\n"),
+            ("create", "tasks/recovery-trigger-review.txt", None, b"x"),
+        ])
+    except mod.Fail as exc:
+        if "rollback incomplete" not in exc.message or "recovery-target-review.txt" not in exc.message:
+            raise SystemExit("incomplete rollback was not reported: %s" % exc.message)
+        if "recovery copies:" not in exc.message:
+            raise SystemExit("incomplete rollback did not report recovery copy: %s" % exc.message)
+    else:
+        raise SystemExit("restore failure was reported as a successful rollback")
+finally:
+    os.replace = real_replace
+copies = list((root / "tasks").glob(".tasks-recovery-*-recovery-target-review.txt"))
+if len(copies) != 1 or copies[0].read_bytes() != b"original bytes\n":
+    raise SystemExit("original bytes were not retained in a recovery copy")
+copies[0].unlink()
+recovery_target.unlink()
+
 # 4312988869: a move destination created after planning fails closed.
 store = mod.load_store(root)
 mod.assert_store_unchanged(store, [("move", "tasks/absent-4312988869.txt", "tasks/index.md", b"x")])
@@ -3363,6 +3470,20 @@ if not receipt.get("ok") or not (root / receipt["path"]).is_file():
     raise SystemExit("4312989062 retry receipt: %s" % receipt)
 print("second-review regressions ok")
 PY
+  tw_ok "display tables on complete" complete --root "$FIX" --id "$TID_DEMO"
+  python3 - "$FIX/tasks/index.md" "$U_DEMO" "$U_CHILD" <<'PY' || fail "complete left maintained status/blocked displays stale ($label)"
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+demo, child = sys.argv[2:]
+if f"| {demo} | Demo task | done |" not in text:
+    raise SystemExit("completed task row was not refreshed")
+if f"| {child} | Child B | in_progress |" not in text or f"| {child} | Child B | in_progress | tasks/" not in text:
+    raise SystemExit("dependent waiter row was not preserved")
+row = next(line for line in text.splitlines() if f"| {child} |" in line)
+if "| no |" not in row:
+    raise SystemExit("dependent waiter blocked display was not refreshed: %s" % row)
+PY
+  pass "display tables refreshed on completion ($label)"
   pass "4312988824/4312988869/4312988911/4312989062 regressions ($label)"
 
   rm -f "$FIX.tw.out" "$FIX.tw.err" "$FIX.writer.out" "$FIX.writer.err" \

@@ -85,16 +85,20 @@ def contained(root: Path, p: Path) -> bool:
 def find_member(root: Path, folder: Path, ulid: str) -> tuple[Path, str] | None:
     """Member inside an already-reached list folder: task file or child list folder (ULID prefix).
     Symlinks and anything resolving outside root are never followed (no writes outside --root)."""
+    candidates: list[tuple[Path, str]] = []
     for p in sorted(folder.iterdir()):
         if not p.name.startswith(ulid) or not contained(root, p):
             continue
         if p.is_dir():
             for f in sorted(p.glob(f"{ulid}*.task-list.md")):
                 if contained(root, f):
-                    return f, "list"
+                    candidates.append((f, "list"))
         elif p.suffix == ".md" and not p.name.endswith(".task-list.md"):
-            return p, "task"
-    return None
+            candidates.append((p, "task"))
+    candidates = list({path: (path, kind) for path, kind in candidates}.values())
+    if len(candidates) > 1:
+        raise FrontmatterError(f"ambiguous member {ulid} in {folder}")
+    return candidates[0] if candidates else None
 
 
 def render(list_file: Path, meta: dict, rows: list[tuple[str, str, str, str]]) -> str:
@@ -193,6 +197,7 @@ def _find_member_virtual(
     """Same classification as ``find_member``, using overlay plus directory names only."""
     if not ulid:
         return None
+    candidates: list[tuple[str, str]] = []
     for name, kind in _direct_entries(root, folder_rel, overlay):
         if not name.startswith(ulid):
             continue
@@ -200,10 +205,13 @@ def _find_member_virtual(
             sub = _child_rel(folder_rel, name)
             for subname, subkind in _direct_entries(root, sub, overlay):
                 if subkind == "file" and subname.startswith(ulid) and subname.endswith(".task-list.md"):
-                    return _child_rel(sub, subname), "list"
+                    candidates.append((_child_rel(sub, subname), "list"))
         elif kind == "file" and name.endswith(".md") and not name.endswith(".task-list.md"):
-            return _child_rel(folder_rel, name), "task"
-    return None
+            candidates.append((_child_rel(folder_rel, name), "task"))
+    candidates = list({path: (path, kind) for path, kind in candidates}.values())
+    if len(candidates) > 1:
+        raise FrontmatterError(f"ambiguous member {ulid} in {folder_rel or '.'}")
+    return candidates[0] if candidates else None
 
 
 def render_list_folder_index(
@@ -240,7 +248,10 @@ def render_list_folder_index(
     rows: list[tuple[str, str, str, str]] = []
     for uri in uris:
         u = ulid_of(uri)
-        hit = _find_member_virtual(root, folder_rel, u or "", overlay) if u else None
+        try:
+            hit = _find_member_virtual(root, folder_rel, u or "", overlay) if u else None
+        except FrontmatterError as e:
+            return "", str(e)
         if hit is None:
             return "", f"{list_rel}: member {uri} not resolved in {folder_rel}/"
         path_rel, kind = hit
@@ -292,7 +303,12 @@ def main(argv: list[str] | None = None) -> int:
             continue
         for uri in uris:
             u = ulid_of(uri)
-            hit = find_member(root, folder, u) if u else None
+            try:
+                hit = find_member(root, folder, u) if u else None
+            except FrontmatterError as e:
+                print(f"error: {lrel}: {e}", file=sys.stderr)
+                rc = 1
+                hit = None
             m2: dict = {}
             if hit is not None:
                 try:

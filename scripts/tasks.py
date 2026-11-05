@@ -630,6 +630,7 @@ class Store:
         self.by_ulid: dict[str, Page] = {}
         self.reached_folders: set[str] = set()
         self.extra_moves: list[tuple[str, str, bytes]] = []
+        self.extra_dir_moves: list[tuple[str, str, int]] = []
         self.relocated_index: dict[str, tuple[str, bytes]] = {}
         self.loaded: dict[str, tuple[bytes | None, int | None]] = {}
         self.root_page: Page | None = None
@@ -654,8 +655,7 @@ class Store:
         dest = self.root / new_rel
         if dest.exists() and not dest.is_symlink():
             raise Fail("target path already exists")
-        # Pin 8: path-form dependency/blocks still resolve only while the old
-        # lookup exists. Convert them to the stable URI before dropping it.
+        # Convert path-form relation edges before dropping the old lookup.
         self._stabilize_path_edges(page)
         old = page.rel
         self.pages.pop(old, None)
@@ -676,7 +676,6 @@ class Store:
                 path = edge.get("path") if isinstance(edge, dict) else None
                 if (
                     isinstance(edge, dict)
-                    and edge.get("kind") in ("dependency", "blocks")
                     and isinstance(path, str)
                     and parse_uri(path) is None
                     and self.pages.get(path) is page
@@ -720,7 +719,10 @@ class Store:
             folder = "tasks"
         # pin 20: ULID-prefix match only inside a folder already reached
         if m and folder in self.reached_folders:
-            hit = lfi().find_member(self.root, self.root / folder, m.group(1))
+            try:
+                hit = lfi().find_member(self.root, self.root / folder, m.group(1))
+            except lfi().FrontmatterError as e:
+                raise Fail(str(e)) from e
             if hit is not None:
                 hit_rel = hit[0].relative_to(self.root).as_posix()
                 if hit_rel in self.pages:
@@ -876,7 +878,10 @@ def load_store(root: Path) -> Store:
             ulid = lfi().ulid_of(uri)
             if not ulid:
                 continue
-            hit = lfi().find_member(root, root / folder, ulid)
+            try:
+                hit = lfi().find_member(root, root / folder, ulid)
+            except lfi().FrontmatterError as e:
+                raise Fail(str(e)) from e
             if hit is None:
                 continue
             path, kind = hit
@@ -979,63 +984,47 @@ def remove_mention_lines(body: str, uri: str, where: str) -> str:
 
 
 def list_rename_pairs(old_rel: str, new_rel: str, old_folder: str, new_folder: str) -> list[tuple[str, str]]:
-    """Store-relative paths plus links as seen from the parent list and the root body.
-
-    Parent and root bodies often use a relative folder link or the list-page
-    basename (``<ULID>-trip/<ULID>-trip.task-list.md``) rather than the
-    store-relative folder. Those forms are rewritten in the same one-pass,
-    longest-first replacement as the store-relative paths.
-    """
-    old_page = Path(old_rel).name
-    new_page = Path(new_rel).name
-    old_base = Path(old_folder).name
-    new_base = Path(new_folder).name
-    pairs = [
+    """Return store-relative file and folder moves for link rewriting."""
+    return [
         (old_rel, new_rel),
         (old_folder + "/", new_folder + "/"),
-        (old_folder, new_folder),
-        (f"{old_base}/{old_page}", f"{new_base}/{new_page}"),
-        (old_base + "/", new_base + "/"),
-        (old_page, new_page),
-        (old_base, new_base),
+        (Path(old_rel).name, Path(new_rel).name),
     ]
-    prefix = "tasks/"
-    if old_folder.startswith(prefix) and new_folder.startswith(prefix):
-        old_from_root = old_folder[len(prefix) :]
-        new_from_root = new_folder[len(prefix) :]
-        old_page_from_root = old_rel[len(prefix) :] if old_rel.startswith(prefix) else ""
-        new_page_from_root = new_rel[len(prefix) :] if new_rel.startswith(prefix) else ""
-        pairs.extend(
-            [
-                (old_page_from_root, new_page_from_root),
-                (old_from_root + "/", new_from_root + "/"),
-                (old_from_root, new_from_root),
-            ]
-        )
-    return pairs
 
 
 def rewrite_paths(store: Store, pairs: list[tuple[str, str]]) -> None:
-    """Replace path strings once, longest match first, over the original body only."""
-    unique: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    ordered = sorted((old, new) for old, new in pairs if old and old != new)
-    ordered.sort(key=lambda item: len(item[0]), reverse=True)
-    for old, new in ordered:
-        if old in seen:
-            continue
-        seen.add(old)
-        unique.append((old, new))
-    if not unique:
+    """Rewrite moved paths as seen from each referring page's directory."""
+    mappings = [(old.rstrip("/"), new.rstrip("/"), old.endswith("/")) for old, new in pairs if old and old != new]
+    if not mappings:
         return
-    pattern = re.compile("|".join(re.escape(old) for old, _new in unique))
-    mapping = dict(unique)
-
-    def repl(match: re.Match) -> str:
-        return mapping[match.group(0)]
-
     for page in list(store.pages.values()):
-        page.set_body(pattern.sub(repl, page.body))
+        old_page_rel = page.original_rel or page.rel
+        old_page_dir = Path(old_page_rel).parent.as_posix()
+        new_page_dir = Path(page.rel).parent.as_posix()
+        candidates: dict[str, str] = {}
+        for old, new, directory in mappings:
+            old_ref = os.path.relpath(old, old_page_dir).replace("\\", "/")
+            new_ref = os.path.relpath(new, new_page_dir).replace("\\", "/")
+            if directory:
+                old_ref += "/"
+                new_ref += "/"
+            if old_ref and old_ref != new_ref:
+                candidates[old_ref] = new_ref
+            # Also rewrite store-relative references used by older indexes.
+            if old != new:
+                candidates[old + ("/" if directory else "")] = new + ("/" if directory else "")
+        ordered = sorted(candidates.items(), key=lambda pair: len(pair[0]), reverse=True)
+        if not ordered:
+            continue
+        alternatives = "|".join(
+            re.escape(old) if old.endswith("/") else re.escape(old) + r"(?=$|[/\s<>()\[\]\"'?#])"
+            for old, _new in ordered
+        )
+        pattern = re.compile(
+            rf"(?<![A-Za-z0-9_.-])(?:{alternatives})"
+        )
+        replacements = dict(ordered)
+        page.set_body(pattern.sub(lambda match: replacements[match.group(0)], page.body))
 
 
 def append_unique(page: Page, key: str, uri: str) -> None:
@@ -1063,6 +1052,36 @@ def remove_member(owner: Page, uri: str) -> None:
     tasks = [item for item in (owner.meta.get("tasks") or []) if item != uri]
     owner.set_meta("tasks", tasks)
     owner.set_body(new_body)
+
+
+def refresh_member_mention(owner: Page, title: str, uri: str, rel: str) -> None:
+    lines = []
+    found = False
+    for line in owner.body.splitlines(keepends=True):
+        if uri not in line:
+            lines.append(line)
+            continue
+        if not _isolated_member_line(line, uri):
+            lines.append(line)
+            continue
+        match = re.match(r"^(\s*(?:[-*+]|\d+[.)])\s+)", line)
+        prefix = match.group(1) if match else "- "
+        ending = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+        lines.append(f"{prefix}{title} — {uri} — {rel}{ending}")
+        found = True
+    if found:
+        owner.set_body("".join(lines))
+    else:
+        tasks = list(owner.meta.get("tasks") or [])
+        if uri not in tasks:
+            tasks.append(uri)
+            owner.set_meta("tasks", tasks)
+        body = owner.body
+        if body and not body.endswith("\n"):
+            body += "\n"
+        if body and not body.endswith("\n\n"):
+            body += "\n"
+        owner.set_body(body + f"- {title} — {uri} — {rel}\n")
 
 
 def append_edge(page: Page, uri: str, kind: str) -> None:
@@ -1361,6 +1380,7 @@ def rename_title(store: Store, page: Page, title: str, affected: list[str]) -> N
     if page is store.root_page:
         page.set_meta("title", title)
         return  # pin 16/21: root path stays tasks/index.md
+    owner = owner_of(store, page)
     ulid = page.ulid
     name = file_safe_name(title)
     if page.kind == "task":
@@ -1369,7 +1389,8 @@ def rename_title(store: Store, page: Page, title: str, affected: list[str]) -> N
         new_rel = f"{folder}/{ulid}-{name}.md"
         if new_rel != old_rel:
             store.move_page(page, new_rel)
-            rewrite_paths(store, [(old_rel, new_rel), (Path(old_rel).name, Path(new_rel).name)])
+            rewrite_paths(store, [(old_rel, new_rel)])
+        refresh_member_mention(owner, title, page.uri, page.rel)
         mark(affected, folder)
         return
     old_folder = Path(old_rel).parent.as_posix()
@@ -1386,13 +1407,15 @@ def rename_title(store: Store, page: Page, title: str, affected: list[str]) -> N
         # auxiliary files). Still rename the list page when its basename changes.
         if new_rel != old_rel:
             store.move_page(page, new_rel)
-            rewrite_paths(store, [(old_rel, new_rel), (Path(old_rel).name, Path(new_rel).name)])
+            rewrite_paths(store, [(old_rel, new_rel)])
+        refresh_member_mention(owner, title, page.uri, page.rel)
         mark(affected, new_folder)
         if parent_folder != "tasks":
             mark(affected, parent_folder)
         return
     move_list_folder(store, page, old_folder, new_folder, new_rel)
     rewrite_paths(store, list_rename_pairs(old_rel, new_rel, old_folder, new_folder))
+    refresh_member_mention(owner, title, page.uri, page.rel)
     mark(affected, new_folder)
     if parent_folder != "tasks":
         mark(affected, parent_folder)
@@ -1405,12 +1428,23 @@ def move_list_folder(store: Store, list_page: Page, old_folder: str, new_folder:
     if dest_dir.is_symlink() or dest_dir.exists():
         raise Fail("target path already exists")
     files = []
+    dirs: list[Path] = []
     base = store.root / old_folder
     if base.is_dir() and not base.is_symlink():
+        dirs.append(base)
+        dirs.extend(
+            path for path in base.rglob("*")
+            if path.is_dir() and not path.is_symlink() and contained(store.root, path)
+        )
         for path in base.rglob("*"):
             if path.is_symlink() or not path.is_file() or not contained(store.root, path):
                 continue
             files.append(path.relative_to(store.root).as_posix())
+    for path in dirs:
+        src = path.relative_to(store.root).as_posix()
+        suffix = src[len(old_folder) :].lstrip("/")
+        dest = f"{new_folder}/{suffix}" if suffix else new_folder
+        store.extra_dir_moves.append((src, dest, stat.S_IMODE(path.stat().st_mode)))
     old_index = f"{old_folder}/index.md"
     if old_index in files:
         index_raw = snapshot_file(store, old_index)
@@ -1428,9 +1462,26 @@ def move_list_folder(store: Store, list_page: Page, old_folder: str, new_folder:
             if data is None or rel == dest:
                 continue
             store.extra_moves.append((rel, dest, data))
+    for page in list(store.pages.values()):
+        if page.kind != "task":
+            continue
+        for key in ("body_path", "related_node"):
+            value = page.meta.get(key)
+            if isinstance(value, str):
+                relocated = relocate_folder_path(value, old_folder, new_folder)
+                if relocated != value:
+                    page.set_meta(key, relocated)
     if list_page.rel != new_rel:
         store.move_page(list_page, new_rel)
     store.reached_folders.add(new_folder)
+
+
+def relocate_folder_path(value: str, old_folder: str, new_folder: str) -> str:
+    if value == old_folder:
+        return new_folder
+    if value.startswith(old_folder.rstrip("/") + "/"):
+        return new_folder.rstrip("/") + value[len(old_folder.rstrip("/")) :]
+    return value
 
 
 def set_membership(store: Store, task: Page, list_page: Page | None, affected: list[str]) -> None:
@@ -1593,6 +1644,11 @@ def complete_page(store: Store, ref: str) -> Page:
 def post_exists(store: Store, rel: str, overlay: dict[str, str | None]) -> bool:
     if rel in overlay:
         return overlay[rel] is not None
+    for old, new, _mode in store.extra_dir_moves:
+        if rel == new:
+            return True
+        if rel == old:
+            return False
     return exists_inside(store.root, rel)
 
 
@@ -1601,14 +1657,16 @@ def _path_dir(rel: str) -> str:
     return "" if parent == "." else parent
 
 
-def beside_related(root: Path, body_path: str, related: str) -> bool:
+def beside_related(store: Store, body_path: str, related: str) -> bool:
     """Pin 5: body directory matches the related node's directory after the write.
 
     A file node shares its parent directory. A directory node is that directory
     (same rule as body_rel_for).
     """
-    node = root / related
-    if node.is_dir() and not node.is_symlink():
+    node = store.root / related
+    moved_dir = any(dest == related for _src, dest, _mode in store.extra_dir_moves)
+    removed_dir = any(src == related for src, _dest, _mode in store.extra_dir_moves)
+    if moved_dir or (not removed_dir and node.is_dir() and not node.is_symlink()):
         related_dir = norm_rel(related)
     else:
         related_dir = _path_dir(related)
@@ -1667,7 +1725,7 @@ def validate_changed(store: Store, required: list[str], overlay: dict[str, str |
                 related = str(page.meta.get("related_node"))
                 if not post_exists(store, related, overlay):
                     raise Fail("related_node does not exist")
-                if not beside_related(store.root, body_path, related):
+                if not beside_related(store, body_path, related):
                     raise Fail("body_path is not beside related_node")
         page.output_text()
 
@@ -1800,6 +1858,76 @@ def derived_blocked(store: Store, page: Page) -> bool:
     return False
 
 
+def _table_cells(line: str) -> list[str]:
+    cells = line.rstrip("\r\n").split("|")
+    if cells and not cells[0].strip():
+        cells = cells[1:]
+    if cells and not cells[-1].strip():
+        cells = cells[:-1]
+    return cells
+
+
+def _replace_table_cell(raw: str, value: str) -> str:
+    leading = raw[: len(raw) - len(raw.lstrip())]
+    trailing = raw[len(raw.rstrip()) :]
+    current = raw.strip()
+    if current.startswith("`") and current.endswith("`"):
+        value = f"`{value}`"
+    return f"{leading}{value}{trailing}"
+
+
+def refresh_display_tables(store: Store) -> None:
+    """Refresh status and derived-blocked cells in maintained task tables."""
+    for owner in list(store.pages.values()):
+        lines = owner.body.splitlines(keepends=True)
+        changed = False
+        for header_index in range(len(lines) - 1):
+            if "|" not in lines[header_index] or not re.match(r"^\s*\|?.*\|.*\|?\s*$", lines[header_index]):
+                continue
+            header = [cell.strip().strip("`").lower() for cell in _table_cells(lines[header_index])]
+            separator = _table_cells(lines[header_index + 1])
+            if not any(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in separator):
+                continue
+            status_col = next((i for i, name in enumerate(header) if name in ("status", "task_status")), None)
+            blocked_col = next((i for i, name in enumerate(header) if name == "blocked"), None)
+            identity_cols = [i for i, name in enumerate(header) if name in ("ulid", "task_id", "task_path")]
+            if not identity_cols or (status_col is None and blocked_col is None):
+                continue
+            row_index = header_index + 2
+            while row_index < len(lines) and "|" in lines[row_index]:
+                cells = _table_cells(lines[row_index])
+                if len(cells) == len(header):
+                    page = None
+                    for column in identity_cols:
+                        if column >= len(cells):
+                            continue
+                        key = cells[column].strip().strip("`")
+                        parsed = parse_uri(key)
+                        if parsed and parsed[0] == store.atlas_id:
+                            page = store.by_ulid.get(parsed[1])
+                        elif ULID_RE.match(key):
+                            page = store.by_ulid.get(key)
+                        else:
+                            page = next((item for item in store.pages.values() if item.rel == key), None)
+                        if page is not None:
+                            break
+                    if page is not None and page.kind == "task":
+                        if status_col is not None and status_col < len(cells):
+                            cells[status_col] = _replace_table_cell(cells[status_col], str(page.meta.get("task_status") or ""))
+                        if blocked_col is not None and blocked_col < len(cells):
+                            old = cells[blocked_col].strip().lower()
+                            blocked = derived_blocked(store, page)
+                            value = ("true" if blocked else "false") if old in ("true", "false") else ("yes" if blocked else "no")
+                            cells[blocked_col] = _replace_table_cell(cells[blocked_col], value)
+                        raw = lines[row_index]
+                        ending = "\r\n" if raw.endswith("\r\n") else "\n" if raw.endswith("\n") else ""
+                        lines[row_index] = "|" + "|".join(cells) + "|" + ending
+                        changed = True
+                row_index += 1
+        if changed:
+            owner.set_body("".join(lines))
+
+
 def index_owned(text: str) -> bool:
     try:
         meta, _body = lfi().frontmatter(text)
@@ -1897,6 +2025,7 @@ def collect_ops(store: Store, index_ops: list[dict]) -> tuple[list[dict], list[t
             continue
         changes.append({"action": "move", "path": new, "from": old})
         write_ops.append(("move", new, old, content))
+    write_ops.extend(("dir-move", new, old, mode) for old, new, mode in store.extra_dir_moves)
     for op in index_ops:
         changes.append({"action": op["action"], "path": op["path"]})
         write_ops.append((op["action"], op["path"], None, op["content"].encode("utf-8")))
@@ -2031,7 +2160,19 @@ def assert_store_unchanged(store: Store, write_ops: list[tuple]) -> None:
         st = path.stat()
         if st.st_mtime_ns != mtime or path.read_bytes() != data:
             raise Fail("fail-closed: store changed during write; retry")
-    for action, path, _src, _content in write_ops:
+    for action, path, src, content in write_ops:
+        if action == "dir-move":
+            source = store.root / str(src)
+            dest = store.root / path
+            if (
+                source.is_symlink()
+                or not source.is_dir()
+                or stat.S_IMODE(source.stat().st_mode) != content
+                or dest.exists()
+                or dest.is_symlink()
+            ):
+                raise Fail("fail-closed: store changed during write; retry")
+            continue
         if action not in ("create", "move") or path in store.loaded:
             continue
         dest = store.root / path
@@ -2052,6 +2193,45 @@ def remove_created_dirs(root: Path, created: list[str]) -> None:
             path.rmdir()
         except OSError:
             continue
+
+
+def create_moved_dir(root: Path, rel: str, mode: int, created_dirs: list[str]) -> None:
+    dest = safe_path(root, rel)
+    if dest.exists() or dest.is_symlink():
+        raise Fail("target path already exists")
+    dest.mkdir(mode=mode)
+    os.chmod(dest, stat.S_IMODE(mode))
+    created_dirs.append(rel)
+
+
+def remove_moved_source_dirs(root: Path, moves: list[tuple[str, str, int]]) -> None:
+    for rel, _dest, _mode in sorted(moves, key=lambda item: (item[0].count("/"), len(item[0])), reverse=True):
+        path = root / rel
+        try:
+            if path.is_symlink() or not path.is_dir() or not contained(root, path):
+                continue
+            if not any(path.iterdir()):
+                path.rmdir()
+        except OSError:
+            continue
+
+
+def preserve_recovery_copies(root: Path, failed_paths: list[str], snapshots: dict[str, bytes | None]) -> list[str]:
+    token = secrets.token_hex(6)
+    saved = []
+    for index, rel in enumerate(failed_paths, start=1):
+        data = snapshots.get(rel)
+        if data is None:
+            continue
+        name = Path(rel).name or "original"
+        recovery_rel = f"tasks/.tasks-recovery-{token}-{index}-{name}"
+        try:
+            atomic_write(root, recovery_rel, data, mode=0o600)
+        except Exception:
+            saved.append(f"{rel} (recovery copy failed)")
+        else:
+            saved.append(f"{rel} -> {recovery_rel}")
+    return saved
 
 
 def apply_ops(root: Path, write_ops: list[tuple]) -> None:
@@ -2081,6 +2261,13 @@ def apply_ops(root: Path, write_ops: list[tuple]) -> None:
         return umask_file_mode()
 
     try:
+        directory_moves = [
+            (src, path, int(content))
+            for action, path, src, content in write_ops
+            if action == "dir-move"
+        ]
+        for _src, path, mode in sorted(directory_moves, key=lambda item: (item[1].count("/"), len(item[1]))):
+            create_moved_dir(root, path, mode, created_dirs)
         for action, path, src, content in write_ops:
             if action not in ("create", "update", "move"):
                 continue
@@ -2102,14 +2289,16 @@ def apply_ops(root: Path, write_ops: list[tuple]) -> None:
             remember(victim)
             safe_unlink(root, victim)
             deleted.append(victim)
+        remove_moved_source_dirs(root, directory_moves)
     except Exception as e:
+        restore_failures: list[str] = []
         for rel in reversed(deleted):
             data = snapshots.get(rel)
             if data is not None:
                 try:
                     atomic_write(root, rel, data, mode=modes.get(rel), created_dirs=created_dirs)
                 except Exception:
-                    pass
+                    restore_failures.append(rel)
         for rel in reversed(written):
             data = snapshots.get(rel)
             try:
@@ -2118,7 +2307,14 @@ def apply_ops(root: Path, write_ops: list[tuple]) -> None:
                 else:
                     atomic_write(root, rel, data, mode=modes.get(rel), created_dirs=created_dirs)
             except Exception:
-                pass
+                restore_failures.append(rel)
+        restore_failures = list(dict.fromkeys(restore_failures))
+        if restore_failures:
+            recovery = preserve_recovery_copies(root, restore_failures, snapshots)
+            details = ", ".join(restore_failures)
+            saved = "; recovery copies: " + ", ".join(recovery) if recovery else ""
+            remove_created_dirs(root, created_dirs)
+            raise Fail(f"write failed; rollback incomplete for {details}{saved}") from e
         remove_created_dirs(root, created_dirs)
         raise Fail("write failed; rolled back") from e
     for rel in deleted:
@@ -2196,6 +2392,7 @@ def cmd_complete(args) -> dict:
     with StoreLock(root, exclusive=not args.dry_run):
         store = load_store(root)
         page = complete_page(store, args.id)
+        refresh_display_tables(store)
         return finish("complete", args.dry_run, store, page, [])
 
 
@@ -2210,8 +2407,9 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--title", required=True)
     add.add_argument("--kind", default="task", choices=["task", "task-list"])
     add.add_argument("--related-node")
-    add.add_argument("--body-path")
-    add.add_argument("--body")
+    body_source = add.add_mutually_exclusive_group()
+    body_source.add_argument("--body-path")
+    body_source.add_argument("--body")
     add.add_argument("--task-id")
     add.add_argument("--status")
     add.add_argument("--assignee", action="append")

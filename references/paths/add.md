@@ -15,6 +15,8 @@ python3 <skill>/scripts/tasks.py add --root <root> --title "<title>" \
 
 `REF` is a full `atlas://` URI, a bare ULID, or a store-relative pointer path. Receipt fields: `ok`, `command`, `dry_run`, `atlas_id`, `task_id`, `ulid`, `title`, `kind`, `path`, `body_path`, `task_list`, `parent`, `derived_blocked`, `changes`, `index_refresh`, `warnings`.
 
+For a task, `--body` and `--body-path` are mutually exclusive; pass exactly one body source.
+
 ## Activation
 
 Load `references/paths/activation.md` first. Card `path: add`.
