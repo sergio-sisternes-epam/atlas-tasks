@@ -10,7 +10,8 @@
 # Checks:
 #   1. Tree scan: every git-tracked file against the deny-list.
 #   2. Commit metadata: author/committer emails must be GitHub noreply
-#      addresses; names and full messages must not match the deny-list.
+#      addresses or the repository owner's verified work address; names and
+#      full messages must not match the deny-list.
 #   3. Added lines: `+` lines of the diff for the range against the deny-list.
 #   4. gitleaks over the checkout (skipped locally when the binary is absent,
 #      unless HYGIENE_REQUIRE_GITLEAKS=1).
@@ -134,7 +135,9 @@ fi
 
 email_ok() {
   local e="$1"
-  [[ "$e" == *@users.noreply.github.com || "$e" == "noreply@github.com" ]]
+  [[ "$e" == *@users.noreply.github.com \
+    || "$e" == "noreply@github.com" \
+    || "$e" == "sergio_sisternes@epam.com" ]]
 }
 
 meta_bad=0
