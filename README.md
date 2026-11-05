@@ -51,6 +51,17 @@ The Atlas CLI must be available through the `atlas` skill or `scripts/atlas.py`.
 
 For legacy `todo/` stores, `depends_on`, older task identifiers, or older filename layouts, follow the [`migrate` path](references/paths/migrate.md). Release history is in [`CHANGELOG.md`](CHANGELOG.md).
 
+## Validation
+
+Run the package smokes from the repository root:
+
+```bash
+ATLAS_CLI=<atlas-skill>/scripts/atlas.py bash scripts/smoke-check.sh .
+bash scripts/public-hygiene-scan.sh --all
+```
+
+`ATLAS_CLI` is optional when the `atlas` skill is installed beside this package. The SCHEMA 2.0 smokes require the Python `jsonschema` package.
+
 ## License
 
 Apache License 2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
