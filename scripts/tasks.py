@@ -1048,6 +1048,8 @@ def rebase_markdown_links(page: Page, old_rel: str, new_rel: str) -> None:
         if not path:
             return match.group(0)
         target = posixpath.normpath(posixpath.join(old_dir, path))
+        if target == old_rel:
+            target = new_rel
         rebased = posixpath.relpath(target, new_dir)
         if path.endswith("/") and not rebased.endswith("/"):
             rebased += "/"

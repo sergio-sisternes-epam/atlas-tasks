@@ -3085,6 +3085,35 @@ if receipt.get("ok") is not False or receipt.get("error") != "fail-closed: unexp
 print("writer internals ok")
 PY
 
+  # 4312989100: self-links stay pointed at a task moved into a list folder.
+  tw_ok "4312989100 add self-link list" add --root "$FIX" --kind task-list --title "Self link list"
+  read -r SELF_LIST_ID < <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task_id"])' "$FIX.tw.out")
+  tw_ok "4312989100 add self-link task" add --root "$FIX" --title "Self link task" \
+    --related-node "$RELATED" --body "$BODY"
+  read -r SELF_TASK_ID SELF_TASK_PATH < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["path"])' "$FIX.tw.out")
+  python3 - "$FIX/$SELF_TASK_PATH" <<'PY' || fail "4312989100 could not inject self-links ($label)"
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+with path.open("a", encoding="utf-8") as page:
+    page.write("\n[dot self](./%s#content)\n[plain self](%s#content)\n" %
+               (path.name, path.name))
+PY
+  tw_ok "4312989100 move self-link task" update --root "$FIX" --id "$SELF_TASK_ID" --task-list "$SELF_LIST_ID"
+  SELF_NEW_PATH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["path"])' "$FIX.tw.out")"
+  python3 - "$FIX/$SELF_NEW_PATH" <<'PY' || fail "4312989100 self-links did not follow moved task ($label)"
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+expected = "[dot self](%s#content)\n[plain self](%s#content)" % (path.name, path.name)
+if expected not in text:
+    raise SystemExit("self-links were not rebased to the moved task's own path")
+text = text.replace(expected, "")
+path.write_text(text, encoding="utf-8")
+PY
+  pass "4312989100 self-links stay in the moved task's folder ($label)"
+
   # 4312989017: rewrite relative folder links and list-page basenames in the same pass.
   tw_ok "4312989017 add link list" add --root "$FIX" --kind task-list --title "Link list"
   read -r LINK_ID LINK_ULID LINK_PATH < <(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["task_id"], o["ulid"], o["path"])' "$FIX.tw.out")
