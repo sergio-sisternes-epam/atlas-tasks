@@ -51,10 +51,6 @@ The Atlas CLI must be available through the `atlas` skill or `scripts/atlas.py`.
 
 For legacy `todo/` stores, `depends_on`, older task identifiers, or older filename layouts, follow the [`migrate` path](references/paths/migrate.md). Release history is in [`CHANGELOG.md`](CHANGELOG.md).
 
-## Contributing
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for validation and release handoff.
-
 ## License
 
 Apache License 2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
