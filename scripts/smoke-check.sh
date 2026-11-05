@@ -2185,6 +2185,21 @@ PY
   grep -Fq "ambiguous member $LOOSE_ULID" "$FIX.writer.out" \
     || fail "ambiguous reached ULID error ($label): $(cat "$FIX.writer.out" "$FIX.writer.err")"
   rm -f "$FIX/tasks/${LOOSE_ULID}-shadow.md"
+  AMBIG_ULID="01J8E3K7M4Q2V8X5N6P9R0T1YA"
+  AMBIG_ID="atlas://${AID}/tasks/${AMBIG_ULID}"
+  python3 - "$FIX/$LOOSE_PATH" "$FIX/tasks/${AMBIG_ULID}-old.md" "$LOOSE_ID" "$AMBIG_ID" "$LOOSE_ULID" "$AMBIG_ULID" <<'PY'
+import sys
+source, target, old_id, new_id, old_ulid, new_ulid = sys.argv[1:]
+text = open(source, encoding="utf-8").read()
+text = text.replace(old_id, new_id).replace(old_ulid, new_ulid)
+open(target, "w", encoding="utf-8").write(text)
+PY
+  rc="$(assert_unchanged "add ambiguous physical member" add --root "$FIX" --title "New duplicate" \
+    --related-node "$RELATED" --body "$BODY" --task-id "$AMBIG_ID")"
+  [[ "$rc" == "1" ]] || fail "duplicate physical member add must exit 1, got $rc ($label)"
+  grep -Fq "ambiguous member $AMBIG_ULID" "$FIX.writer.out" \
+    || fail "add did not reject ambiguous physical member ($label): $(cat "$FIX.writer.out" "$FIX.writer.err")"
+  rm -f "$FIX/tasks/${AMBIG_ULID}-old.md"
   python3 - "$FIX/tasks/${U_DEMO}-${N_DEMO}.md" "$LOOSE_PATH" <<'PY' || fail "could not add path-form related edge ($label)"
 import sys
 path, target = sys.argv[1:]
@@ -2255,12 +2270,15 @@ meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", open(sys.argv[1], encoding="
 assert any(edge.get("kind") == "related" and edge.get("path") == sys.argv[2] for edge in meta["relates_to"])
 PY
   printf '\n[Details](<%s>)\n' "${LOOSE_ULID}-loose-renamed.md" >> "$FIX/tasks/index.md"
+  printf '\n[Body](../knowledge/demo/todo-demo.md)\n' >> "$FIX/$REN_PATH"
 
   mov="$(PYTHONDONTWRITEBYTECODE=1 python3 "$TW" update --root "$FIX" --id "$LOOSE_ID" --task-list "$TID_LIST")"
   read -r MOV_PATH < <(printf '%s\n' "$mov" | python3 -c 'import json,sys; o=json.load(sys.stdin); print(o["path"])')
   [[ "$MOV_PATH" == "tasks/${U_LIST}-${N_LIST}/${LOOSE_ULID}-loose-renamed.md" ]] || fail "moved path ($MOV_PATH)"
   [[ -f "$FIX/$MOV_PATH" ]] || fail "moved file missing ($label)"
   [[ ! -e "$FIX/$REN_PATH" ]] || fail "loose path remains after move ($label)"
+  grep -Fq "[Body](../../knowledge/demo/todo-demo.md)" "$FIX/$MOV_PATH" \
+    || fail "task page relative Markdown link was not rebased on membership move ($label)"
   grep -Fq "[Details](<${U_LIST}-${N_LIST}/${LOOSE_ULID}-loose-renamed.md>)" "$FIX/tasks/index.md" \
     || fail "relative Markdown link was not rebased on membership move ($label)"
   python3 - "$FIX/tasks/index.md" "$FIX/tasks/${U_LIST}-${N_LIST}/${U_LIST}-${N_LIST}.task-list.md" \
@@ -2408,6 +2426,33 @@ PY
   printf 'keep-notes\n' > "$TRIP_DIR/notes.txt"
   printf 'same attachment basename\n' > "$TRIP_DIR/${U_LIST}-trip-notes.txt"
   printf '\n[Trip notes](<%s-trip/%s-trip-notes.txt>)\n' "$U_LIST" "$U_LIST" >> "$FIX/tasks/index.md"
+  mkdir -p "$TRIP_DIR/private"
+  cat > "$TRIP_DIR/private/index.md" <<'MD'
+---
+type: document
+title: Private task folder
+created: "2026-10-01"
+---
+Index for the task's private related document.
+MD
+  cat > "$TRIP_DIR/private/related.md" <<'MD'
+---
+type: document
+title: Private related document
+created: "2026-10-01"
+---
+Ordinary document referenced by the task.
+MD
+  python3 - "$FIX/$TRIP_PATH" "$U_LIST" <<'PY'
+import sys
+path, ulid = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+target = f"tasks/{ulid}-trip/private/related.md"
+marker = "relates_to: []\n"
+assert marker in text
+text = text.replace(marker, f"relates_to:\n  - path: {target}\n    kind: related\n", 1)
+open(path, "w", encoding="utf-8").write(text)
+PY
   LIST_PAGE="$TRIP_DIR/${U_LIST}-trip.task-list.md"
   [[ -f "$LIST_PAGE" && -f "$TRIP_DIR/index.md" ]] || fail "trip list folder incomplete before case rename ($label)"
   tw_ok "4312597554 case rename" update --root "$FIX" --id "$TID_LIST" --title "TRIP"
@@ -2460,9 +2505,11 @@ PY
   rm -rf "$FIX/tasks/${DEST_ULID}-dest-b"
 
   # 4312597792 / 4312597833: one-pass longest rewrite; non-page files move as raw bytes.
+  chmod 600 "$TRIP_DIR/index.md"
   tw_ok "4312597792 prefix rename" update --root "$FIX" --id "$TID_LIST" --title "Trip new"
   python3 - "$FIX" "$U_LIST" <<'PY' || fail "4312597792 prefix rename broke links or attachments ($label)"
 import sys
+import stat
 from pathlib import Path
 fix, ulid = sys.argv[1:]
 root = Path(fix)
@@ -2475,12 +2522,22 @@ assert (new / "notes.txt").read_text(encoding="utf-8") == "keep-notes\n"
 assert (new / (ulid + "-trip-notes.txt")).read_text(encoding="utf-8") == "same attachment basename\n"
 assert (new / "index.md").is_file()
 assert (new / f"{ulid}-trip-new.task-list.md").is_file()
+assert stat.S_IMODE((new / "index.md").stat().st_mode) == 0o600
 root_body = (root / "tasks" / "index.md").read_text(encoding="utf-8")
 assert f"[Trip notes](<{ulid}-trip-new/{ulid}-trip-notes.txt>)" in root_body
 assert f"{ulid}-trip-new-notes.txt" not in root_body
 blob = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in (root / "tasks").rglob("*.md"))
 assert "trip-new-new" not in blob, "folder token rewritten twice"
 assert "UnicodeDecodeError" not in blob
+PY
+  python3 - "$FIX/tasks/${U_LIST}-trip-new/${TRIP_ULID}-trip-child.md" "$U_LIST" <<'PY' \
+    || fail "4312597792 list move did not relocate relates_to paths ($label)"
+import re, sys, yaml
+from pathlib import Path
+path, ulid = sys.argv[1:]
+meta = yaml.safe_load(re.match(r"^---\n(.*?)\n---", Path(path).read_text(encoding="utf-8"), re.S).group(1))
+expected = f"tasks/{ulid}-trip-new/private/related.md"
+assert any(edge.get("path") == expected and edge.get("kind") == "related" for edge in meta["relates_to"])
 PY
 
   # 4312597692 / 4312597980: stabilize path edges on move; derived_blocked resolves them first.
@@ -2553,6 +2610,70 @@ for path in Path(fix, "tasks").rglob("*.md"):
         break
 assert found is not None, "blocks edge was not converted to a task URI"
 assert old_wait not in found
+PY
+
+  # 4485098497: a stale pointer path still resolves to its renamed task by ULID prefix.
+  BLOCK_CURRENT="tasks/${BLOCK_ULID}-path-blocker-moved.md"
+  WAIT_CURRENT="tasks/${WAIT_ULID}-path-waiter-moved.md"
+  python3 - "$FIX/$WAIT_CURRENT" "$BLOCK_ID" "$BLOCK_PATH" <<'PY' || fail "could not restore stale path dependency ($label)"
+import re, sys
+from pathlib import Path
+path, uri, stale = sys.argv[1:]
+text = Path(path).read_text(encoding="utf-8")
+pattern = re.compile(r"(?m)^(  - path: )" + re.escape(uri) + r"(\n    kind: dependency)$")
+updated, count = pattern.subn(lambda match: match.group(1) + stale + match.group(2), text, count=1)
+assert count == 1
+Path(path).write_text(updated, encoding="utf-8")
+PY
+  mv "$FIX/$BLOCK_CURRENT" "$FIX/tasks/${BLOCK_ULID}-manual.md"
+  tw_ok "4485098497 remove stale path dependency" update --root "$FIX" --id "$WAIT_ID" \
+    --remove-dependency "$BLOCK_PATH"
+  python3 - "$FIX/$WAIT_CURRENT" "$FIX/tasks/${BLOCK_ULID}-manual.md" "$WAIT_ID" <<'PY' \
+    || fail "4485098497 stale path dependency was not removed ($label)"
+import re, sys, yaml
+from pathlib import Path
+wait_path, block_path, wait_id = sys.argv[1:]
+def meta(path):
+  text = Path(path).read_text(encoding="utf-8")
+  return yaml.safe_load(re.match(r"^---\n(.*?)\n---", text, re.S).group(1))
+assert not any(edge.get("kind") == "dependency" for edge in meta(wait_path).get("relates_to") or [])
+assert not any(edge.get("kind") == "blocks" for edge in meta(block_path).get("relates_to") or [])
+PY
+  mv "$FIX/tasks/${BLOCK_ULID}-manual.md" "$FIX/$BLOCK_CURRENT"
+
+  # 4485098430: interruption after the first replace restores the old index.
+  PYTHONDONTWRITEBYTECODE=1 python3 - "$TW" <<'PY' || fail "4485098430 interrupted write did not roll back ($label)"
+import importlib.util
+import sys
+import tempfile
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("atlas_tasks_writer", sys.argv[1])
+tasks = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tasks)
+with tempfile.TemporaryDirectory() as tmp:
+  root = Path(tmp)
+  (root / "tasks").mkdir()
+  index = root / "tasks/index.md"
+  index.write_bytes(b"before\n")
+  original = tasks.atomic_write
+  attempts = [0]
+  def interrupt_on_new_page(*args, **kwargs):
+      attempts[0] += 1
+      if attempts[0] == 2:
+          raise KeyboardInterrupt
+      return original(*args, **kwargs)
+  tasks.atomic_write = interrupt_on_new_page
+  try:
+      tasks.apply_ops(root, [
+          ("update", "tasks/index.md", None, b"after\n"),
+          ("create", "tasks/new.md", None, b"new\n"),
+      ])
+  except KeyboardInterrupt:
+      pass
+  else:
+      raise AssertionError("KeyboardInterrupt was swallowed")
+  assert index.read_bytes() == b"before\n"
+  assert not (root / "tasks/new.md").exists()
 PY
 
   # 4312597735: preserve CRLF. A status update and complete each change one line.

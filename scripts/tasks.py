@@ -21,6 +21,7 @@ import fcntl
 import importlib.util
 import json
 import os
+import posixpath
 import re
 import secrets
 import stat
@@ -1027,6 +1028,35 @@ def rewrite_paths(store: Store, pairs: list[tuple[str, str]]) -> None:
         page.set_body(pattern.sub(lambda match: replacements[match.group(0)], page.body))
 
 
+def rebase_markdown_links(page: Page, old_rel: str, new_rel: str) -> None:
+    old_dir = Path(old_rel).parent.as_posix()
+    new_dir = Path(new_rel).parent.as_posix()
+    pattern = re.compile(
+        r"(?P<prefix>!?\[[^]\n]*\]\()(?P<space>\s*)"
+        r"(?P<dest><[^>\n]*>|(?:\\.|[^()\s]|\([^()\n]*\))*)"
+        r"(?P<tail>[^)\n]*)\)"
+    )
+
+    def replace(match: re.Match) -> str:
+        destination = match.group("dest")
+        angled = destination.startswith("<") and destination.endswith(">")
+        raw = destination[1:-1] if angled else destination
+        if not raw or raw.startswith(("/", "#")) or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", raw):
+            return match.group(0)
+        suffix_at = re.search(r"[?#]", raw)
+        path, suffix = (raw[:suffix_at.start()], raw[suffix_at.start():]) if suffix_at else (raw, "")
+        if not path:
+            return match.group(0)
+        target = posixpath.normpath(posixpath.join(old_dir, path))
+        rebased = posixpath.relpath(target, new_dir)
+        if path.endswith("/") and not rebased.endswith("/"):
+            rebased += "/"
+        replacement = f"<{rebased}{suffix}>" if angled else f"{rebased}{suffix}"
+        return f"{match.group('prefix')}{match.group('space')}{replacement}{match.group('tail')})"
+
+    page.set_body(pattern.sub(replace, page.body))
+
+
 def append_unique(page: Page, key: str, uri: str) -> None:
     values = list(page.meta.get(key) or [])
     if uri not in values:
@@ -1102,10 +1132,10 @@ def edge_uri(store: Store, path) -> str | None:
         return page.uri if page else path
     if parsed:
         return path
-    page = store.pages.get(path) or store.by_ulid.get(path)
-    if page:
-        return page.uri
-    return None
+    try:
+        return store.resolve(path).uri
+    except Fail:
+        return None
 
 
 def remove_edge(store: Store, page: Page, uri: str, kind: str) -> bool:
@@ -1471,6 +1501,24 @@ def move_list_folder(store: Store, list_page: Page, old_folder: str, new_folder:
                 relocated = relocate_folder_path(value, old_folder, new_folder)
                 if relocated != value:
                     page.set_meta(key, relocated)
+        edges = page.meta.get("relates_to")
+        if isinstance(edges, list):
+            updated = []
+            changed = False
+            for edge in edges:
+                if not isinstance(edge, dict) or not isinstance(edge.get("path"), str):
+                    updated.append(edge)
+                    continue
+                relocated = relocate_folder_path(edge["path"], old_folder, new_folder)
+                if relocated == edge["path"]:
+                    updated.append(edge)
+                    continue
+                copied = dict(edge)
+                copied["path"] = relocated
+                updated.append(copied)
+                changed = True
+            if changed:
+                page.set_meta("relates_to", updated)
     if list_page.rel != new_rel:
         store.move_page(list_page, new_rel)
     store.reached_folders.add(new_folder)
@@ -1517,6 +1565,7 @@ def set_membership(store: Store, task: Page, list_page: Page | None, affected: l
         mark(affected, folder)
     if new_rel != old_rel:
         store.move_page(task, new_rel)
+        rebase_markdown_links(task, old_rel, new_rel)
         rewrite_paths(store, [(old_rel, new_rel)])
     add_member(owner, str(task.meta.get("title") or ""), task.uri, task.rel)
 
@@ -1730,6 +1779,48 @@ def validate_changed(store: Store, required: list[str], overlay: dict[str, str |
         page.output_text()
 
 
+def virtual_member_paths(store: Store, folder: str, ulid: str, overlay: dict[str, str | None]) -> set[str]:
+    candidates: set[str] = set()
+    folder_rel = Path(folder)
+    folder_path = store.root / folder_rel
+    if folder_path.is_dir() and not folder_path.is_symlink() and contained(store.root, folder_path):
+        for child in folder_path.iterdir():
+            if not child.name.startswith(ulid) or child.is_symlink() or not contained(store.root, child):
+                continue
+            if child.is_dir():
+                for member in child.iterdir():
+                    if (
+                        member.name.startswith(ulid)
+                        and member.name.endswith(".task-list.md")
+                        and not member.is_symlink()
+                        and contained(store.root, member)
+                    ):
+                        candidates.add(member.relative_to(store.root).as_posix())
+            elif child.is_file() and child.suffix == ".md" and not child.name.endswith(".task-list.md"):
+                candidates.add(child.relative_to(store.root).as_posix())
+
+    for rel, content in overlay.items():
+        if content is None:
+            candidates.discard(rel)
+            continue
+        path = Path(rel)
+        if (
+            path.parent == folder_rel
+            and path.name.startswith(ulid)
+            and path.suffix == ".md"
+            and not path.name.endswith(".task-list.md")
+        ):
+            candidates.add(rel)
+        elif (
+            path.parent.parent == folder_rel
+            and path.parent.name.startswith(ulid)
+            and path.name.startswith(ulid)
+            and path.name.endswith(".task-list.md")
+        ):
+            candidates.add(rel)
+    return candidates
+
+
 def compliance(store: Store, touched: set[str]) -> None:
     if store.root_page is None:
         raise Fail("tasks/index.md missing or not type: task-list; run mount-overlay or migrate")
@@ -1746,6 +1837,7 @@ def compliance(store: Store, touched: set[str]) -> None:
     root_uris = list(root.meta.get("tasks") or [])
     if not isinstance(root_uris, list):
         raise Fail("tasks must be a list of atlas:// URIs")
+    overlay = store.overlay()
 
     def walk(list_page: Page, seen_lists: set[str]) -> None:
         if list_page.uri in seen_lists:
@@ -1764,6 +1856,12 @@ def compliance(store: Store, touched: set[str]) -> None:
                 raise Fail("membership both sides disagree")
             if not member.rel.startswith(folder + "/"):
                 raise Fail("member is not inside the list folder")
+            member_ulid = lfi().ulid_of(uri)
+            matches = virtual_member_paths(store, folder, member_ulid, overlay)
+            if len(matches) > 1:
+                raise Fail(f"ambiguous member {member_ulid} in {folder}")
+            if matches != {member.rel}:
+                raise Fail("membership both sides disagree")
             if member.kind == "task":
                 tl = member.meta.get("task_list")
                 if list_page is root:
@@ -1986,11 +2084,12 @@ def plan_indexes(store: Store, affected: list[str]) -> tuple[list[dict], list[di
         if existing == content and not old_rel:
             refresh.append({"path": idx_rel, "action": "ok"})
             continue
-        action = "update" if existing is not None and not old_rel else "create"
+        relocated = old_rel and old_raw is not None and old_rel != idx_rel
+        action = "move" if relocated else "update" if existing is not None else "create"
         refresh.append({"path": idx_rel, "action": action})
         op = {"action": action, "path": idx_rel, "content": content}
-        if old_rel and old_rel != idx_rel:
-            op["delete"] = old_rel
+        if action == "move":
+            op["from"] = old_rel
         ops.append(op)
     return refresh, ops, warnings
 
@@ -2027,8 +2126,11 @@ def collect_ops(store: Store, index_ops: list[dict]) -> tuple[list[dict], list[t
         write_ops.append(("move", new, old, content))
     write_ops.extend(("dir-move", new, old, mode) for old, new, mode in store.extra_dir_moves)
     for op in index_ops:
-        changes.append({"action": op["action"], "path": op["path"]})
-        write_ops.append((op["action"], op["path"], None, op["content"].encode("utf-8")))
+        change = {"action": op["action"], "path": op["path"]}
+        if op.get("from"):
+            change["from"] = op["from"]
+        changes.append(change)
+        write_ops.append((op["action"], op["path"], op.get("from"), op["content"].encode("utf-8")))
         if op.get("delete"):
             changes.append({"action": "delete", "path": op["delete"]})
             write_ops.append(("delete", op["delete"], None, None))
@@ -2290,7 +2392,7 @@ def apply_ops(root: Path, write_ops: list[tuple]) -> None:
             safe_unlink(root, victim)
             deleted.append(victim)
         remove_moved_source_dirs(root, directory_moves)
-    except Exception as e:
+    except BaseException as e:
         restore_failures: list[str] = []
         for rel in reversed(deleted):
             data = snapshots.get(rel)
@@ -2316,7 +2418,9 @@ def apply_ops(root: Path, write_ops: list[tuple]) -> None:
             remove_created_dirs(root, created_dirs)
             raise Fail(f"write failed; rollback incomplete for {details}{saved}") from e
         remove_created_dirs(root, created_dirs)
-        raise Fail("write failed; rolled back") from e
+        if isinstance(e, Exception):
+            raise Fail("write failed; rolled back") from e
+        raise
     for rel in deleted:
         prune_empty(root, rel)
 
