@@ -11,7 +11,7 @@ Use atlas-tasks to add, update, complete, and recall tasks on an Atlas the opera
 - Maintain `tasks/index.md` as each Atlas's root task list, with loose tasks and pointers to named task lists.
 - Keep task bodies beside related knowledge; core `task` pages and task-list pages act as pointers.
 - Create and maintain task lists with `type: task-list` pages and membership pointers.
-- Record dependencies with `relates_to` edges and derive a task's blocked state from open dependency targets. Cross-Atlas references can name remote tasks; reverse `blocks` edges are written only within the same Atlas.
+- Record dependencies with `relates_to` edges and derive a task's blocked state from open or in-progress dependency targets. Cross-Atlas references can name remote tasks; reverse `blocks` edges are written only within the same Atlas.
 - Install the `atlas-tasks` schema overlay on an operator-named Atlas.
 
 ## Install
