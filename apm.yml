@@ -1,5 +1,5 @@
 name: atlas-tasks
-version: "0.7.0"
+version: "0.7.1"
 description: Atlas tasks discipline — distributed Atlas task capability (source package)
 author: Sergio Sisternes
 license: Apache-2.0
@@ -9,6 +9,7 @@ type: skill
 # Accepted values: agent-skills, antigravity, claude, codex, copilot, cursor, gemini, grok-build, hermes, kiro, opencode, vscode, windsurf
 targets:
   - agent-skills
+  - copilot
   - cursor
 dependencies:
   apm: []

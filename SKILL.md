@@ -2,7 +2,7 @@
 name: atlas-tasks
 description: Use for distributed Atlas tasks — add/update/complete tasks and task lists, maintain per-Atlas tasks/index.md as the root task list, mount the atlas-tasks overlay on a user-named Atlas, and list/recall task pointers with assignees, hierarchy, task_list membership, relates_to dependency/blocks dual-write and derived blocked. Trigger on atlas-tasks, atlas-todo, tasks index, todo index, add task, add todo, complete task, list tasks, recall tasks, query tasks (deprecated alias of recall), task list, task-list, mount tasks overlay, distributed task, assignees, sub-tasks, depends_on, dependency, blocks, atlas://, ULID. Builds on core Atlas task; does not replace Governor tasks or APM HITL queues.
 metadata:
-  version: "0.7.0"
+  version: "0.7.1"
   status: mvp
   work_id: 2026-10-04-atlas-tasks-task-lists
 ---
@@ -16,6 +16,8 @@ Distributed Atlas **task** discipline. Each participating Atlas has `tasks/index
 **v0.6.2** — the overlay carries only Atlas contract keys, so it installs on SCHEMA 2.0 stores. No page, frontmatter or schema-key change. Reinstall with `schema install` (no `--force`) before any `schema upgrade --to 2.0`.
 
 **v0.7.0** — every non-root task-list folder carries a generated `index.md` (a reserved directory listing, no `type`) so Atlas compile's `index_md_present` check stays green. Add/update keep it current; `scripts/list-folder-index.py` backfills existing stores (migrate Checklist E). No change to task or list frontmatter, ids, or the overlay.
+
+**v0.7.1** — add an additional supported package target.
 
 **v0.6.3** — the read verb is now **recall**, Atlas core's verb; **query** remains a deprecated alias routing to **list**. No page, frontmatter or schema-key change.
 
