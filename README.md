@@ -30,6 +30,8 @@ python3 <atlas-skill>/scripts/atlas.py schema install \
 python3 <atlas-skill>/scripts/atlas.py compile --root <your-atlas-root>
 ```
 
+Canonical install pin after publish: `sergio-sisternes-epam/atlas-tasks#v0.7.1`.
+
 ## Use
 
 1. Name the target Atlas and run the skill path `mount-overlay`.
@@ -50,6 +52,8 @@ The Atlas CLI must be available through the `atlas` skill or `scripts/atlas.py`.
 ## Migrate / upgrade
 
 For legacy `todo/` stores, `depends_on`, older task identifiers, or older filename layouts, follow the [`migrate` path](references/paths/migrate.md). Release history is in [`CHANGELOG.md`](CHANGELOG.md).
+
+**v0.7.1** adds an additional supported package target.
 
 ## Validation
 
